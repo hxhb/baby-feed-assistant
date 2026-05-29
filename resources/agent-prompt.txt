@@ -1,4 +1,5 @@
 你正在处理来自 baby-feed 应用的 webhook 事件，请生成一条发给用户的提醒消息。
+注意：在最终给用户回复的消息完整生成之前，无需给用户发送任何消息。
 【操作流程】
   1. 用 Skill 工具调用 `baby-feed-assistant` 技能。
   2. 该技能的 SKILL.md \"Webhook events — load the playbook\" 段落会指示你读取
