@@ -1,12 +1,22 @@
 ---
 name: baby-feed-assistant
-version: 2.9.0
+version: 2.9.1
 description: "Query and manage baby feeding, health, growth, sleep and reminder data through the Baby Feed HTTP API. Trigger on any English or Chinese mention of: feeding/nursing/formula/breast-milk/solid-food (喂奶/母乳/瓶喂/奶粉/辅食), diapers (尿布/大便/小便), sleep (睡眠/小睡/夜醒), weight/height/temperature (体重/身高/体温), vitamin AD or medication (AD/维生素/用药), vaccines (疫苗/打针), memos and reminders (备忘/待办/提醒), or daily/weekly summaries (今天/本周/情况/统计). Trigger on BOTH queries ('宝宝今天吃了多少', '上次体温', '下次疫苗什么时候') AND recording requests ('记录一下刚喂奶', '宝宝刚拉了'). Also use this skill when handling incoming webhook events: `feeding.created` / `health.created` / `memo.created` / `reminder.fired`, plus their `*.updated` and `*.deleted` variants."
 ---
 
 # Baby Feed Assistant
 
 You query and manage feeding/health/sleep/growth/memo data through the Baby Feed HTTP API, and respond to webhook events from the same app (`feeding.created` / `health.created` / `memo.created` / `reminder.fired` / `*.updated` / `*.deleted`).
+
+> **⚠️ Reading bundled skill files (`<SKILL_DIR>/references/*`, `<SKILL_DIR>/resources/*`)**
+>
+> These are **local files on disk**, not URLs. Open them with your harness's filesystem read tool:
+> - Claude Code → `Read` tool with the absolute path
+> - Codex / Hermes / other CLI harnesses → the equivalent local file-read tool (e.g. `read_file`, `view`, `cat` via shell)
+>
+> **Never** call `web_fetch` / `web_extract` / `WebFetch` / `fetch` / any URL-based tool on these paths. **Never** prepend `file://` — URL-safety filters block that scheme and the call silently returns empty content, leaving you to hallucinate the playbook from memory. If your only available read mechanism is a shell, use `cat <SKILL_DIR>/path/to/file.md`, **not** a web tool.
+>
+> Symptom that means you violated this rule: you see a log line like `Blocked request — unsupported URL scheme: file` or `(no content to process)`. Stop, switch to the filesystem read tool, and re-read the file before continuing.
 
 ## Setup — the wrapper script
 
@@ -44,13 +54,13 @@ bash <SKILL_DIR>/scripts/query-api.sh GET "/api/stats?babyId=X&days=7" "" "d['to
 
 The `?date=YYYY-MM-DD` GET param is **Beijing date** — don't pre-convert.
 
-📖 **Full bug table, examples, and rationale:** read `references/time-handling.md` if anything's unclear.
+📖 **Full bug table, examples, and rationale:** open `<SKILL_DIR>/references/time-handling.md` with your filesystem read tool (see the warning at the top of this file — local file, not a URL) if anything's unclear.
 
 ---
 
 ## API endpoints — quick reference
 
-📖 **Detailed signatures, field tables, and JSON response shapes:** read `references/api.md` the first time you need a specific endpoint's fields. The table below is just for routing.
+📖 **Detailed signatures, field tables, and JSON response shapes:** open `<SKILL_DIR>/references/api.md` with your filesystem read tool (local file — see top-of-file warning) the first time you need a specific endpoint's fields. The table below is just for routing.
 
 | Group | GET | Mutating |
 |---|---|---|
@@ -183,6 +193,7 @@ Round when sensible (`约120ml`, not `119.5ml`). Units: `ml`, `分钟`, `kg`, `c
 | Assuming `lastDays[]` always has weight/height | They appear only on measurement days. |
 | Forgetting `stats.medicationRecords[]` is bounded by `days` | Vaccines are full history; medications are not. |
 | Piping wrapper output to python3/jq externally | Use the 4th-arg FILTER, or read raw JSON. |
+| Calling `web_fetch` / `web_extract` / `file://` on `<SKILL_DIR>/...` paths | These are local files, not URLs. Use the filesystem read tool (`Read` in Claude Code, equivalent elsewhere, or `cat` via shell). `file://` is blocked and returns empty content. |
 
 ---
 
@@ -192,7 +203,10 @@ When the incoming message is a webhook event from this app (`type` is one of
 `feeding.created` / `health.created` / `memo.created` / `reminder.fired`, or
 any `*.updated` / `*.deleted` variant):
 
-1. **Read** `<SKILL_DIR>/resources/webhook-analysis.md` with the Read tool.
+1. **Open** the local file `<SKILL_DIR>/resources/webhook-analysis.md` with your harness's **filesystem read tool** — `Read` in Claude Code, the equivalent local read tool elsewhere, or `cat` via shell as a last resort.
+   - ❌ **Do NOT** use `web_fetch`, `web_extract`, `WebFetch`, `fetch`, or any URL-based tool. The path is on disk, not the web.
+   - ❌ **Do NOT** prepend `file://`. URL-safety filters block that scheme; the call returns empty content and you'll end up improvising from stale memory.
+   - ✅ If you see `Blocked request — unsupported URL scheme: file` or `(no content to process)` in your tool log, you violated this rule — switch to the filesystem read tool and re-read before responding.
 2. Follow it strictly — it is the single source of truth for webhook output
    format, data-precision rules, tool-call discipline, per-event-type
    playbook, and the four `reminder.fired` scenarios.
