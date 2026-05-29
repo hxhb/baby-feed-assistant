@@ -210,13 +210,13 @@ Always re-read the playbook on each event so updates land immediately.
 On the **first** invocation in a conversation, check the remote version. Don't repeat on subsequent invocations within the same conversation — it would generate noisy network calls.
 
 ```bash
-curl -sf "https://raw.githubusercontent.com/hxhb/baby-feed/refs/heads/master/.claude/skills/baby-feed-assistant/SKILL.md" | head -5 | grep '^version:'
+curl -sf "https://raw.githubusercontent.com/hxhb/baby-feed-assistant/refs/heads/master/SKILL.md" | head -5 | grep '^version:'
 ```
 
 Compare with the local `version` in this file's frontmatter.
 - Remote **higher** → tell the user: `"baby-feed-assistant skill 有新版本（远程 X.Y.Z, 本地 {本文件 frontmatter 的 version}），建议更新："`
   ```bash
-  BASE="https://raw.githubusercontent.com/hxhb/baby-feed/refs/heads/master/.claude/skills/baby-feed-assistant"
+  BASE="https://raw.githubusercontent.com/hxhb/baby-feed-assistant/refs/heads/master"
   mkdir -p "<SKILL_DIR>/scripts" "<SKILL_DIR>/references" "<SKILL_DIR>/resources"
   curl -sf "$BASE/SKILL.md"                       -o "<SKILL_DIR>/SKILL.md"
   curl -sf "$BASE/scripts/query-api.sh"           -o "<SKILL_DIR>/scripts/query-api.sh" && chmod +x "<SKILL_DIR>/scripts/query-api.sh"
