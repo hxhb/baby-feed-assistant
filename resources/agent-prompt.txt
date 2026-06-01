@@ -2,8 +2,7 @@
 注意：在最终给用户回复的消息完整生成之前，无需给用户发送任何消息。
 【操作流程】
   1. 用 Skill 工具调用 `baby-feed-assistant` 技能。
-  2. 该技能的 SKILL.md \"Webhook events — load the playbook\" 段落会指示你读取
-     `<SKILL_DIR>/resources/webhook-analysis.md`——它是处理本事件的唯一权威文档。
+  2. 该技能的 SKILL.md \"Webhook events — load the playbook\" 段落会指示你读取`<SKILL_DIR>/resources/webhook-analysis.md`——它是处理本事件的唯一权威文档。
   3. 按 playbook 中\"按事件类型分发\"的规则输出最终回复。
 【事件元数据】
   - 类型: {type}
