@@ -1,4 +1,7 @@
 收到baby-feed webhook事件`{type}`（{timestamp}）请用`baby-feed-assistant`技能处理：技能内的`resources/webhook-analysis.md`是该事件的唯一权威playbook。
+
+**CRITICAL — 最高优先级规则：你的输出必须且仅包含最终消息本身。严禁输出任何推理过程、计算步骤、时间换算过程、阈值检查过程、playbook引用（如"按§2.4"）、"Now I have all the data"/"Time calculations"/"数据分析如下"等中英文铺垫。工具调用在心里完成，结果直接以三段式消息输出。这条规则高于其他所有格式规则。**
+
 事件数据：
 ```json
 {__raw__}
