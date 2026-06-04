@@ -55,7 +55,7 @@ if [[ -z "$METHOD" || -z "$ENDPOINT" ]]; then
 fi
 
 # Normalize method to uppercase
-METHOD="${METHOD^^}"
+METHOD=$(echo "$METHOD" | tr '[:lower:]' '[:upper:]')
 
 # Build full URL
 URL="${BABY_FEED_BASE_URL}${ENDPOINT}"

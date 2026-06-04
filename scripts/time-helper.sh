@@ -15,47 +15,51 @@ CMD="${1:-}"
 ARG="${2:-}"
 
 beijing_now() {
-  date -u -v+8H '+%Y-%m-%dT%H:%M:%S+08:00'
+  python3 << 'PYEOF'
+from datetime import datetime, timezone, timedelta
+dt = datetime.now(timezone.utc) + timedelta(hours=8)
+print(dt.strftime('%Y-%m-%dT%H:%M:%S+08:00'))
+PYEOF
 }
 
 beijing_today() {
-  date -u -v+8H '+%Y-%m-%d'
+  python3 << 'PYEOF'
+from datetime import datetime, timezone, timedelta
+dt = datetime.now(timezone.utc) + timedelta(hours=8)
+print(dt.strftime('%Y-%m-%d'))
+PYEOF
 }
 
 to_beijing() {
   local utc="$1"
-  python3 -c "
-import sys
+  export TH_UTC="$utc"
+  python3 << 'PYEOF' 2>&1
+import sys, os
 from datetime import datetime, timezone, timedelta
-# Parse ISO 8601, stripping 'Z' → '+00:00' so fromisoformat handles it
-s = '$utc'.replace('Z', '+00:00')
+s = os.environ["TH_UTC"].replace("Z", "+00:00")
 dt = datetime.fromisoformat(s)
-# Convert to Beijing
 bj = dt.astimezone(timezone(timedelta(hours=8)))
 print(bj.strftime('%Y-%m-%d %H:%M'))
-" 2>&1
+PYEOF
 }
 
 ensure_tz() {
   local t="$1"
-  python3 -c "
-import sys
-s = '$t'.strip()
-# Already has timezone offset → pass through
+  export TH_TIME="$t"
+  python3 << 'PYEOF' 2>&1
+import sys, os
+s = os.environ["TH_TIME"].strip()
 if s.endswith('+08:00') or s.endswith('+0800'):
     print(s)
     sys.exit(0)
-# Remove trailing Z (UTC marker) → replace with +08:00
 if s.endswith('Z'):
     s = s[:-1]
-# Pad missing seconds
 if len(s) == 16:  # yyyy-MM-ddTHH:mm
     s += ':00'
 elif len(s) == 19 and s.count(':') == 2:  # yyyy-MM-ddTHH:mm:ss
     pass
-# Append timezone
 print(f'{s}+08:00')
-" 2>&1
+PYEOF
 }
 
 case "$CMD" in
