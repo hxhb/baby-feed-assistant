@@ -198,7 +198,7 @@ def parse_feedings(raw_str):
 feedings = parse_feedings(os.environ["FEEDING_DATA"])
 yesterday_list = parse_feedings(os.environ.get("YESTERDAY_FEEDINGS", ""))
 
-all_recent = [f for f in feedings if f.get("id") != event_id]
+all_recent = [f for f in feedings if str(f.get("id")) != str(event_id)]
 if not all_recent and yesterday_list:
     all_recent = yesterday_list
 
