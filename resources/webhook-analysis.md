@@ -1,8 +1,7 @@
 # Webhook Event 分析手册
 
-> **CRITICAL — 输出铁律**：你的输出**必须且仅包含**最终的三段式消息。
-> 严禁推理过程、计算步骤、时间换算、阈值检查、playbook 引用、"Now I have all the data"等中英文铺垫。
-> 读消息的是疲惫的爸妈，不是审稿人。
+> **CRITICAL01 — 输出铁律**：你的输出**必须且仅包含**最终的三段式消息。严禁输出推理过程、计算步骤、事件数据罗列、时间换算、阈值检查、playbook 引用、"Now I have all the data"等中英文铺垫，确保只输出最终的规范内容。
+> **CRITICAL02 — 时间处理**：所有时间换算、+08:00后缀、UTC→北京转换必须通过 skill 内的 `time-helper.sh` 或 `analyze-event.sh` 脚本完成，禁止手动构造时间字符串、禁止心算时区偏移、禁止使用 bash `date` 命令自行换算。
 
 本文档是 baby-feed 应用 incoming webhook 事件的分析手册。用中文回答，≤ 200 字，语气友好温和。
 
