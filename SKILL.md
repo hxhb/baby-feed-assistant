@@ -1,6 +1,6 @@
 ---
 name: baby-feed-assistant
-version: 2.10.0
+version: 2.10.1
 description: "Query and manage baby feeding, health, growth, sleep and reminder data through the Baby Feed HTTP API. Trigger on any English or Chinese mention of: feeding/nursing/formula/breast-milk/solid-food (喂奶/母乳/瓶喂/奶粉/辅食), diapers (尿布/大便/小便), sleep (睡眠/小睡/夜醒), weight/height/temperature (体重/身高/体温), vitamin AD or medication (AD/维生素/用药), vaccines (疫苗/打针), memos and reminders (备忘/待办/提醒), or daily/weekly summaries (今天/本周/情况/统计). Trigger on BOTH queries ('宝宝今天吃了多少', '上次体温', '下次疫苗什么时候') AND recording requests ('记录一下刚喂奶', '宝宝刚拉了'). Also use this skill when handling incoming webhook events: `feeding.created` / `health.created` / `memo.created` / `reminder.fired`, plus their `*.updated` and `*.deleted` variants."
 ---
 
@@ -31,23 +31,20 @@ bash <SKILL_DIR>/scripts/query-api.sh GET "/api/stats?babyId=X&days=7" "" "d['to
 
 ---
 
-## 时间处理 — UTC+8（北京）
+## 时间处理 — 统一走 time-helper.sh
 
-**时间戳错误是头号 bug 来源。** 三条规则：
+**不要手动拼时间字符串**，所有时间操作统一调用 `<SKILL_DIR>/scripts/time-helper.sh`：
 
-1. **POST 时间** —— 字符串末尾一律带 `+08:00`。裸 ISO 或 `Z` 后缀会导致
-   存储时差 8 小时。涉及字段：`startTime`、`endTime`、`recordedAt`、
-   `sleepStartTime`、`sleepEndTime`、`scheduledAt`。
-2. **取当前时间** —— 每条记录都重新取一次，不要缓存：
-   ```bash
-   date -u -d '+8 hours' '+%Y-%m-%dT%H:%M:%S+08:00'   # 用于 POST body
-   date -u -d '+8 hours' '+%Y-%m-%d'                  # 用于 ?date= GET 参数
-   ```
-3. **读时间** —— API 响应里时间以 `Z` 结尾（UTC）。展示时加 8 小时，注意日期可能跨天。
+```bash
+bash <SKILL_DIR>/scripts/time-helper.sh now                      # → 2026-06-04T15:30:00+08:00（POST body 直接用）
+bash <SKILL_DIR>/scripts/time-helper.sh today                    # → 2026-06-04（GET ?date= 直接用）
+bash <SKILL_DIR>/scripts/time-helper.sh to-beijing "2026-05-15T07:00:00.000Z"  # → 2026-05-15 15:00（展示用）
+bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "2026-06-04T15:00"           # → 2026-06-04T15:00:00+08:00（补全+08:00）
+```
 
-`?date=YYYY-MM-DD` GET 参数用的是**北京日期**，不要预先换算。
-
-📖 完整 bug 表与示例见 `<SKILL_DIR>/references/time-handling.md`。
+- **POST 时**：用户给的时间字符串用 `ensure-tz` 补后缀；没有时间字段就用 `now` 取当前时间。
+- **展示时**：API 响应里的 `Z` 结尾时间戳用 `to-beijing` 转换后再给用户看。
+- **GET `?date=`**：用 `today` 取当前北京日期，不要手动算。
 
 ---
 
@@ -231,6 +228,7 @@ curl -sf "https://raw.githubusercontent.com/hxhb/baby-feed-assistant/refs/heads/
   mkdir -p "<SKILL_DIR>/scripts" "<SKILL_DIR>/references" "<SKILL_DIR>/resources"
   curl -sf "$BASE/SKILL.md"                       -o "<SKILL_DIR>/SKILL.md"
   curl -sf "$BASE/scripts/query-api.sh"           -o "<SKILL_DIR>/scripts/query-api.sh" && chmod +x "<SKILL_DIR>/scripts/query-api.sh"
+  curl -sf "$BASE/scripts/time-helper.sh"         -o "<SKILL_DIR>/scripts/time-helper.sh" && chmod +x "<SKILL_DIR>/scripts/time-helper.sh"
   curl -sf "$BASE/references/api.md"              -o "<SKILL_DIR>/references/api.md"
   curl -sf "$BASE/references/time-handling.md"    -o "<SKILL_DIR>/references/time-handling.md"
   curl -sf "$BASE/resources/webhook-analysis.md"  -o "<SKILL_DIR>/resources/webhook-analysis.md"

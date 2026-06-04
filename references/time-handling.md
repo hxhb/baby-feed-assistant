@@ -1,53 +1,67 @@
 # Time Handling — UTC+8 (Beijing)
 
-**Wrong timestamps are the #1 source of bugs in this app.** SKILL.md keeps the
-3-line summary; this file is the full reference with examples and the bug
-table. Read this when you're confused about timezone behavior, when a stored
-timestamp shows up 8 hours off, or when handling sleep records that cross
-midnight.
+All time operations go through `<SKILL_DIR>/scripts/time-helper.sh`. The script
+encodes timezone rules so models don't need to remember them.
 
----
+## Subcommands
 
-## Rule 1 — Sending times: always include `+08:00`
-
-The server stores POSTed times via JS `new Date(value)`. The string must end
-with `+08:00`, otherwise it's silently misinterpreted as UTC and ends up
-8 hours off.
-
-| Input | Stored as | Displayed as | Verdict |
-|-------|-----------|--------------|---------|
-| `2026-05-15T15:00:00`        | UTC 15:00 | Beijing 23:00 | ❌ wrong |
-| `2026-05-15T15:00:00Z`       | UTC 15:00 | Beijing 23:00 | ❌ wrong |
-| `2026-05-15T15:00:00+08:00`  | UTC 07:00 | Beijing 15:00 | ✅ correct |
-
-This applies to every time field you send: `startTime`, `endTime`,
-`recordedAt`, `sleepStartTime`, `sleepEndTime`, `scheduledAt`.
-
----
-
-## Rule 2 — Re-fetch "now" for every record; never reuse a cached timestamp
-
-Messages can arrive asynchronously (voice, queued events). A timestamp
-captured minutes ago is stale. Run this fresh each time you need *now*:
+### `now` — current Beijing time, POST-ready
 
 ```bash
-date -u -d '+8 hours' '+%Y-%m-%dT%H:%M:%S+08:00'   # current Beijing time, ready for POST
-date -u -d '+8 hours' '+%Y-%m-%d'                  # today's Beijing date (for ?date= GET param)
+bash time-helper.sh now
+# → 2026-06-04T15:30:00+08:00
 ```
 
-The trick: `-u` outputs in UTC, and `-d '+8 hours'` shifts forward 8h, so the
-printed wall-clock equals Beijing time. This works regardless of the host's
-local timezone.
+Use this for POST body time fields (`startTime`, `endTime`, `recordedAt`,
+`sleepStartTime`, `sleepEndTime`, `scheduledAt`). Re-run for each record — never
+cache the output.
 
----
+### `today` — current Beijing date, GET-ready
 
-## Rule 3 — Reading times: response timestamps are UTC, add 8h to display
+```bash
+bash time-helper.sh today
+# → 2026-06-04
+```
 
-API responses end with `Z` (UTC). To present to the user, add 8 hours — note
-the date may roll over.
+Use this for `?date=` query params. The parameter is a Beijing date; the server
+handles the UTC window internally.
 
-- `2026-05-15T07:00:00.000Z` → Beijing **15:00 on 2026-05-15**
-- `2026-05-14T23:30:00.000Z` → Beijing **07:30 on 2026-05-15** (date changed!)
+### `to-beijing` — UTC timestamp → display
 
-The `?date=YYYY-MM-DD` GET parameter is a Beijing date — the server handles
-the UTC window internally, so don't pre-convert.
+```bash
+bash time-helper.sh to-beijing "2026-05-15T07:00:00.000Z"
+# → 2026-05-15 15:00
+
+bash time-helper.sh to-beijing "2026-05-14T23:30:00Z"
+# → 2026-05-15 07:30  (跨天)
+```
+
+API responses return timestamps ending in `Z` (UTC). Pipe them through
+`to-beijing` before showing to the user. The script handles date rollover.
+
+### `ensure-tz` — guarantee +08:00 suffix
+
+```bash
+bash time-helper.sh ensure-tz "2026-06-04T15:00"
+# → 2026-06-04T15:00:00+08:00
+
+bash time-helper.sh ensure-tz "2026-06-04T15:00:00"
+# → 2026-06-04T15:00:00+08:00
+
+bash time-helper.sh ensure-tz "2026-06-04T15:00:00+08:00"
+# → 2026-06-04T15:00:00+08:00  (already correct, pass through)
+```
+
+Use this when the user provides a time string that might lack the timezone. Safe
+to call even if the string already has `+08:00` — it's a no-op pass-through.
+
+## Why script over prompt rules
+
+Smaller models struggle with timezone arithmetic in prompts. The script removes
+three failure modes:
+
+| Old (prompt rule) | New (script) |
+|---|---|
+| Model forgets `+08:00` suffix on POST | `ensure-tz` guarantees it |
+| Model reuses cached `now` across records | `now` is re-invoked each time |
+| Model miscalculates UTC+8 display, misses date rollover | `to-beijing` handles it deterministically |
