@@ -31,9 +31,19 @@ bash <SKILL_DIR>/scripts/query-api.sh GET "/api/stats?babyId=X&days=7" "" "d['to
 
 ---
 
-## 时间处理 — 统一走 time-helper.sh
+## 时间处理 — CRITICAL：只走脚本，禁止手算
 
-**不要手动拼时间字符串**，所有时间操作统一调用 `<SKILL_DIR>/scripts/time-helper.sh`：
+> **所有时间操作必须通过 `<SKILL_DIR>/scripts/time-helper.sh` 完成。**
+> 本条高于其他所有规则。违反时间规则的记录会差 8 小时，是最常见的 bug。
+
+**禁止行为：**
+- ❌ 手动写 `+08:00` 后缀 —— 用 `time-helper.sh ensure-tz` 或 `now`
+- ❌ 手动写 UTC 时间戳 —— 你不知道当前 UTC 时间
+- ❌ 手动心算 `+8h` 转换 —— 用 `time-helper.sh to-beijing`
+- ❌ 硬编码日期字符串（如 `date=2026-06-04`）—— 用 `time-helper.sh today`
+- ❌ 在 `date` 命令里手动写 `-d '+8 hours'` 格式串 —— 那是旧方式，用 `time-helper.sh`
+
+**正确做法 —— 四种场景，四个子命令：**
 
 ```bash
 bash <SKILL_DIR>/scripts/time-helper.sh now                      # → 2026-06-04T15:30:00+08:00（POST body 直接用）
@@ -45,6 +55,20 @@ bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "2026-06-04T15:00"           #
 - **POST 时**：用户给的时间字符串用 `ensure-tz` 补后缀；没有时间字段就用 `now` 取当前时间。
 - **展示时**：API 响应里的 `Z` 结尾时间戳用 `to-beijing` 转换后再给用户看。
 - **GET `?date=`**：用 `today` 取当前北京日期，不要手动算。
+
+### analyze-event.sh — Webhook 事件分析
+
+对于 webhook 事件（`feeding.created` / `reminder.fired`），用 `analyze-event.sh` 完成所有确定性计算：
+
+```bash
+bash <SKILL_DIR>/scripts/analyze-event.sh feeding  '<raw_json>'
+bash <SKILL_DIR>/scripts/analyze-event.sh reminder '<raw_json>'
+```
+
+该脚本自动完成 API 查询、时间换算、数学计算、阈值检查，返回结构化 JSON。
+模型只读取 JSON 字段拼接最终消息，**不做任何额外计算**。
+
+⚠️ 不要绕过 `analyze-event.sh` 手动调 `query-api.sh` 然后自己算——那正是本脚本要消除的流程。
 
 ---
 
@@ -65,7 +89,9 @@ bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "2026-06-04T15:00"           #
 
 **三条必须记住的坑（不用每次都翻 references）：**
 
-- POST 所有时间字段都要带 `+08:00`（见"时间处理"）。
+- POST/PUT 所有时间字段**必须通过 `time-helper.sh` 生成**。涉及字段：`startTime`、
+  `endTime`、`recordedAt`、`sleepStartTime`、`sleepEndTime`、`scheduledAt`。
+  缺失 `+08:00` 后缀会导致存储差 8 小时。（见上方"时间处理"）
 - **查询**睡眠用 `/api/sleep-summary`，**不要**用 `/api/health?type=SLEEP`
   —— summary 接口已处理跨午夜拆分。
 - `stats.sleepDurationMinutes` **已经是累计且实时**的值。绝不要做
@@ -106,13 +132,20 @@ bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "2026-06-04T15:00"           #
 
 宽泛问题（如"今天怎么样"）**并行**调用多个 API，不要串行。
 
+> **表中所有 `date=today` 都是 `date=$(bash <SKILL_DIR>/scripts/time-helper.sh today)` 的简写。**
+> 不要传字面字符串 `"today"`，也不要手动写日期。每次 GET 请求前重新获取 `today`，不缓存。
+
 ### Step 3 — 记录事件流程
 
 1. 解析用户说的 type、量、时间。
 2. 关键字段缺失就**只问一个**最关键的问题。
-3. 复述要记的内容，请用户确认。
-4. POST。
-5. 用关键信息回执确认成功。
+3. **所有时间字段通过 `time-helper.sh` 获取**：
+   - 用户没提时间 → 各时间字段用 `bash <SKILL_DIR>/scripts/time-helper.sh now`
+   - 用户提了时间 → `bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "用户给的时间"`
+   - 每个字段**重新调一次**，不要一次 `now` 复用给多个字段
+4. 复述要记的内容，请用户确认。
+5. POST。
+6. 用关键信息回执确认成功。
 
 ---
 
@@ -197,6 +230,9 @@ bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "2026-06-04T15:00"           #
 | 假设 `lastDays[]` 一定有体重/身高 | 仅在测量当天才有 |
 | 忘了 `stats.medicationRecords[]` 受 `days` 限制 | 疫苗是全历史，用药不是 |
 | 在 wrapper 外部把输出 pipe 给 python3/jq | 用第 4 个 FILTER 参数，或读原始 JSON |
+| 手动构造时间字符串（手写 `+08:00`、心算 UTC+8） | 一律走 `time-helper.sh`（`now` / `ensure-tz` / `to-beijing` / `today`） |
+| POST 时一次 `now` 复用到多个 time 字段 | 每个字段**单独调一次** `now`，不缓存 |
+| API 响应时间直接展示（UTC 时间） | 所有展示前的时间串都过 `to-beijing` |
 
 ---
 
@@ -229,8 +265,10 @@ curl -sf "https://raw.githubusercontent.com/hxhb/baby-feed-assistant/refs/heads/
   curl -sf "$BASE/SKILL.md"                       -o "<SKILL_DIR>/SKILL.md"
   curl -sf "$BASE/scripts/query-api.sh"           -o "<SKILL_DIR>/scripts/query-api.sh" && chmod +x "<SKILL_DIR>/scripts/query-api.sh"
   curl -sf "$BASE/scripts/time-helper.sh"         -o "<SKILL_DIR>/scripts/time-helper.sh" && chmod +x "<SKILL_DIR>/scripts/time-helper.sh"
+  curl -sf "$BASE/scripts/analyze-event.sh"       -o "<SKILL_DIR>/scripts/analyze-event.sh" && chmod +x "<SKILL_DIR>/scripts/analyze-event.sh"
   curl -sf "$BASE/references/api.md"              -o "<SKILL_DIR>/references/api.md"
   curl -sf "$BASE/references/time-handling.md"    -o "<SKILL_DIR>/references/time-handling.md"
   curl -sf "$BASE/resources/webhook-analysis.md"  -o "<SKILL_DIR>/resources/webhook-analysis.md"
+  curl -sf "$BASE/resources/agent-prompt.txt"      -o "<SKILL_DIR>/resources/agent-prompt.txt"
   ```
 - 相等 / 更低 / 不可达 → 保持沉默。

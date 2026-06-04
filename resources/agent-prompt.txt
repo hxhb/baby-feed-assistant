@@ -2,6 +2,8 @@
 
 **CRITICAL — 最高优先级规则：你的输出必须且仅包含最终消息本身。严禁输出任何推理过程、计算步骤、时间换算过程、阈值检查过程、playbook引用（如"按§2.4"）、"Now I have all the data"/"Time calculations"/"数据分析如下"等中英文铺垫。工具调用在心里完成，结果直接以三段式消息输出。这条规则高于其他所有格式规则。**
 
+**CRITICAL — 时间处理：所有时间换算、+08:00后缀、UTC→北京转换必须通过 skill 内的 `time-helper.sh` 或 `analyze-event.sh` 脚本完成，禁止手动构造时间字符串、禁止心算时区偏移、禁止使用 bash `date` 命令自行换算。**
+
 事件数据：
 ```json
 {__raw__}
