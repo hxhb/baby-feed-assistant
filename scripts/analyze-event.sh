@@ -36,10 +36,16 @@ try:
     d = json.loads(os.environ["PARSE_JSON"])
     for k in os.environ["PARSE_PATH"].split('.'):
         d = d.get(k, {})
-    result = d if not isinstance(d, dict) or d else ''
+    # Treat None (JSON null), empty dict, and empty string as "no value"
+    if d is None or d == {} or d == '':
+        result = ''
+    elif not isinstance(d, dict):
+        result = d
+    else:
+        result = d
 except:
     result = ''
-if result == '':
+if result is None or result == '':
     result = os.environ["PARSE_DEFAULT"]
 if isinstance(result, str):
     print(result)
@@ -63,7 +69,10 @@ analyze_feeding() {
   babyId=$(parse_field "$raw_json" "data.babyId" "")
   feedingType=$(parse_field "$raw_json" "data.type" "")
   startTime=$(parse_field "$raw_json" "data.startTime" "")
-  eventId=$(parse_field "$raw_json" "data.id" "$(parse_field "$raw_json" "id" "")")
+  eventId=$(parse_field "$raw_json" "data.id" "")
+  # Root-level "id" is the webhook delivery ID, NOT the feeding record ID.
+  # If data.id is null/missing, leave eventId empty — the time-based safety
+  # net in the Python block will handle dedup.
 
   if [[ -z "$babyId" || -z "$feedingType" ]]; then
     echo '{"status":"error","error":"Missing babyId or feeding type in raw JSON"}'
