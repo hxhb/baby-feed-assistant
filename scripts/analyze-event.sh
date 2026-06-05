@@ -199,6 +199,20 @@ feedings = parse_feedings(os.environ["FEEDING_DATA"])
 yesterday_list = parse_feedings(os.environ.get("YESTERDAY_FEEDINGS", ""))
 
 all_recent = [f for f in feedings if str(f.get("id")) != str(event_id)]
+
+# Safety net: if ID filtering failed (event_id empty / type mismatch), also skip
+# the first element when its startTime matches the current event (within 60s).
+if all_recent and start_time_str:
+    try:
+        first_start = all_recent[0].get("startTime", "")
+        if first_start:
+            first_dt = parse_utc(first_start)
+            curr_dt = parse_utc(start_time_str)
+            if abs((first_dt - curr_dt).total_seconds()) < 60:
+                all_recent.pop(0)
+    except:
+        pass
+
 if not all_recent and yesterday_list:
     all_recent = yesterday_list
 
