@@ -71,7 +71,7 @@ analyze_feeding() {
   startTime=$(parse_field "$raw_json" "data.startTime" "")
   eventId=$(parse_field "$raw_json" "data.id" "")
   # Root-level "id" is the webhook delivery ID, NOT the feeding record ID.
-  # If data.id is null/missing, leave eventId empty — the time-based safety
+  # If data.id is null/missing, leave eventId empty -- the time-based safety
   # net in the Python block will handle dedup.
 
   if [[ -z "$babyId" || -z "$feedingType" ]]; then
