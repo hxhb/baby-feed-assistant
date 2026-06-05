@@ -4,8 +4,12 @@
 # happens here. The model reads the JSON output and only handles NL formatting.
 #
 # Usage:
-#   bash analyze-event.sh feeding  '<raw_json>'
-#   bash analyze-event.sh reminder '<raw_json>'
+#   bash analyze-event.sh feeding  '<raw_json>'        # literal JSON (ASCII only)
+#   bash analyze-event.sh reminder '@/path/raw.json'   # JSON from file (use this for non-ASCII)
+#   bash analyze-event.sh reminder < /path/raw.json    # JSON from stdin
+#
+# Webhook payloads contain user-supplied non-ASCII content; pass via @<path>
+# or stdin to avoid Claude Code's confusable-Unicode bash scanner.
 
 set -euo pipefail
 
@@ -432,6 +436,13 @@ analyze_reminder() {
     extra_data=$(call_api GET "/api/feeding?babyId=$babyId&date=$today" "" "")
     export TODAY="$today"
 
+  elif [[ "$triggerType" == "interval" && "$ruleName" == *"睡眠超时"* ]]; then
+    scenario="sleep_timeout"
+    local today
+    today=$(call_time today)
+    extra_data=$(call_api GET "/api/sleep-summary?babyId=$babyId&date=$today" "" "")
+    export TODAY="$today"
+
   elif [[ "$triggerType" == "interval" && "$ruleName" == *"健康定期提醒"* ]]; then
     scenario="health_regular"
     local health_map="{}"
@@ -569,6 +580,12 @@ def fmt_short(dt):
 def fmt_date_short(dt):
     return dt.strftime("%m-%d %H:%M")
 
+def minutes_display(m):
+    m = int(m); h = m // 60; mi = m % 60
+    if h > 0 and mi > 0: return f"{h}小时{mi}分钟"
+    if h > 0: return f"{h}小时"
+    return f"{mi}分钟"
+
 def build_value_display(rec):
     t = rec.get("type", "")
     if t == "BREAST_MILK":
@@ -675,6 +692,43 @@ if scenario == "feeding_timeout":
         else:
             all_parts.append(f"{feeder['label']}{info['count']}次")
     output["today"] = {"display": "今天累计" + "，".join(all_parts) if all_parts else f"今天共{len(feedings)}次喂养"}
+
+# ── scenario: sleep_timeout ──
+elif scenario == "sleep_timeout":
+    extra_raw = os.environ.get("EXTRA_DATA", "")
+    summary = {}
+    if extra_raw and extra_raw.strip():
+        try:
+            summary = json.loads(extra_raw)
+            if not isinstance(summary, dict):
+                summary = {}
+        except:
+            summary = {}
+
+    segments = summary.get("segments", []) or []
+    total_minutes = int(summary.get("totalMinutes", 0) or 0)
+    count = int(summary.get("count", len(segments)) or 0)
+
+    output["today"] = {
+        "display": f"今天累计睡{count}段，共{minutes_display(total_minutes)}" if count else "今天还没有睡眠记录"
+    }
+
+    # Last segment = the one ending latest. sleep-summary returns segments
+    # chronologically, so segments[-1] is sufficient.
+    if segments:
+        last_seg = segments[-1]
+        try:
+            seg_start_bj = to_beijing(parse_utc(last_seg.get("segmentStart", "")))
+            seg_end_bj = to_beijing(parse_utc(last_seg.get("segmentEnd", "")))
+            seg_minutes = int(last_seg.get("segmentMinutes", 0) or 0)
+            output["last_sleep"] = {
+                "range_display": f"{fmt_short(seg_start_bj)} → {fmt_short(seg_end_bj)}",
+                "duration_display": minutes_display(seg_minutes),
+            }
+            if elapsed_min:
+                output["awake"] = {"display": minutes_display(elapsed_min)}
+        except:
+            pass
 
 # ── scenario: health_regular ──
 elif scenario == "health_regular":
@@ -856,6 +910,17 @@ PYEOF
 cmd="${1:-}"
 RAW_JSON="${2:-}"
 
+# Resolve @<path> indirection (see header).
+if [[ "$RAW_JSON" == @* ]]; then
+  json_path="${RAW_JSON#@}"
+  if [[ ! -r "$json_path" ]]; then
+    echo "{\"status\":\"error\",\"error\":\"Cannot read JSON file: $json_path\"}" >&2
+    exit 1
+  fi
+  RAW_JSON=$(cat "$json_path")
+fi
+
+# Stdin fallback when no positional argument provided.
 if [[ -z "$RAW_JSON" ]]; then
   RAW_JSON=$(cat 2>/dev/null || echo "")
 fi

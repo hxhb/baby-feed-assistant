@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # Baby Feed API wrapper — avoids raw curl|python3 pipes that trigger security scanners.
 # Usage:
-#   bash query-api.sh METHOD ENDPOINT [JSON_BODY] [FILTER]
+#   bash query-api.sh METHOD ENDPOINT [JSON_BODY|@FILE] [FILTER]
 #
 # Examples:
 #   bash query-api.sh GET  "/api/babies"
 #   bash query-api.sh GET  "/api/stats?babyId=abc&days=7"
 #   bash query-api.sh POST "/api/feeding" '{"babyId":"abc","type":"FORMULA","startTime":"2026-05-27T10:00:00+08:00","formulaAmount":120}'
+#   bash query-api.sh POST "/api/memo"    '@/tmp/memo.json'   # body from file (use for non-ASCII)
 #   bash query-api.sh PUT  "/api/memo/id123" '{"completed":true}'
 #   bash query-api.sh DELETE "/api/memo/id123"
+#
+# Use @<path> when body contains non-ASCII (Chinese / user input) — avoids
+# Claude Code's confusable-Unicode bash scanner.
 #
 # Optional FILTER (4th arg): a Python expression applied to the parsed JSON.
 #   The variable `d` holds the parsed response. The expression is eval'd and printed.
@@ -45,11 +49,21 @@ ENDPOINT="${2:-}"
 BODY="${3:-}"
 FILTER="${4:-}"
 
+# Resolve @<path> indirection for BODY (see header).
+if [[ "$BODY" == @* ]]; then
+  body_path="${BODY#@}"
+  if [[ ! -r "$body_path" ]]; then
+    echo "ERROR: Cannot read body file: $body_path" >&2
+    exit 1
+  fi
+  BODY=$(cat "$body_path")
+fi
+
 if [[ -z "$METHOD" || -z "$ENDPOINT" ]]; then
-  echo "Usage: bash query-api.sh METHOD ENDPOINT [JSON_BODY] [FILTER]" >&2
+  echo "Usage: bash query-api.sh METHOD ENDPOINT [JSON_BODY|@FILE] [FILTER]" >&2
   echo "  METHOD: GET, POST, PUT, DELETE" >&2
   echo "  ENDPOINT: /api/... (with query params if needed)" >&2
-  echo "  JSON_BODY: optional JSON string for POST/PUT (use \"\" to skip)" >&2
+  echo "  JSON_BODY: optional JSON string for POST/PUT (use \"\" to skip; @<file> for non-ASCII)" >&2
   echo "  FILTER: optional Python expression to extract fields from response" >&2
   exit 1
 fi

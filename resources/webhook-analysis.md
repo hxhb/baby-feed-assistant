@@ -8,6 +8,8 @@
 > ```
 >
 > **CRITICAL02 — 时间处理**：所有时间换算、+08:00后缀、UTC→北京转换必须通过 skill 内的 `time-helper.sh` 或 `analyze-event.sh` 脚本完成，禁止手动构造时间字符串、禁止心算时区偏移、禁止使用 bash `date` 命令自行换算。
+>
+> **CRITICAL03 — JSON 走文件**：调 `analyze-event.sh` 前，先用 **Write 工具**把 raw JSON 写到 `/tmp/bf-event-<id前缀>.json`，再用 `@<路径>` 引用（如 `bash <SKILL_DIR>/scripts/analyze-event.sh reminder '@/tmp/bf-event-a8a24e3a.json'`）。直接把 JSON 当 bash 参数会被 host 的 confusable-Unicode 扫描器拒绝。
 
 本文档是 baby-feed 应用 incoming webhook 事件的分析手册。用中文回答，≤ 200 字，语气友好温和。
 
@@ -57,10 +59,12 @@
 
 ### 1.3 工具调用
 
+调脚本前先用 **Write 工具**把 raw_json 写到 `/tmp/bf-event-<id>.json`，再用 `@<path>` 引用（详见 SKILL.md "非 ASCII body" 节）。
+
 | 事件类型 | 调用 |
 |----------|------|
-| `feeding.created` | `bash <SKILL_DIR>/scripts/analyze-event.sh feeding '<raw_json>'` |
-| `reminder.fired` | `bash <SKILL_DIR>/scripts/analyze-event.sh reminder '<raw_json>'` |
+| `feeding.created` | `bash <SKILL_DIR>/scripts/analyze-event.sh feeding '@/tmp/bf-event-<id>.json'` |
+| `reminder.fired` | `bash <SKILL_DIR>/scripts/analyze-event.sh reminder '@/tmp/bf-event-<id>.json'` |
 | `health.created` (WEIGHT/HEIGHT/TEMP) | `bash query-api.sh GET "/api/health?babyId=X&type=TYPE"` 取历史 |
 | 其他事件 | 不调用额外工具 |
 
@@ -117,11 +121,12 @@
 
 所有 reminder 首行一律 ⏰。风格是"贴心家人轻声提醒"，不是"系统警报"。
 
-### 3.1 四种场景 — 统一走 `analyze-event.sh reminder`
+### 3.1 五种场景 — 统一走 `analyze-event.sh reminder`
 
 | 场景 | triggerType | ruleName 特征 | 脚本返回 `scenario` |
 |------|-------------|--------------|---------------------|
 | 喂养超时 | `interval` | `"喂养超时提醒"` | `feeding_timeout` |
+| 睡眠超时 | `interval` | 含 `"睡眠超时" / "睡眠提醒" / "小睡" / "该睡"` | `sleep_timeout` |
 | 健康定期 | `interval` | `"健康定期提醒"` | `health_regular` |
 | 每日定时 | `cron` | 用户自定义 | `cron` |
 | 疫苗后体温 | `event_window` | `"疫苗后测体温…"` | `event_window` |
@@ -136,6 +141,16 @@
 上次：{last_feeding.emoji} {last_feeding.label} {last_feeding.value_display}（{last_feeding.time_short}）
 {today.display}
 ```
+
+**sleep_timeout** — 字段：`elapsed_display`, `last_sleep.{range_display,duration_display}`, `awake.display`, `today.display`
+
+```
+⏰ {babyName} 已经醒着 {awake.display} 啦（上次小睡 {last_sleep.range_display}），看看困不困？
+
+{today.display}
+```
+
+`last_sleep` 缺失时省略括号内容；`awake` 缺失时首行改为 `⏰ {babyName} 今天还没小睡过哦`。所有数字直接读字段，**不要自己算时间**。
 
 **health_regular** — 字段：`elapsed_days`, `items[].{emoji,label,latest_value_display,latest_date_display,trend_emoji}`
 

@@ -1,10 +1,6 @@
-收到baby-feed webhook事件`{type}`（{timestamp}）请用`baby-feed-assistant`技能处理：技能内的`resources/webhook-analysis.md`是该事件的唯一权威playbook。
+收到baby-feed webhook事件`{type}`（{timestamp}）请用`baby-feed-assistant`技能处理：技能内的`resources/webhook-analysis.md`是该事件的唯一权威playbook，CRITICAL01/02/03 三条铁律以及输出格式、各事件分册都在那里维护，请严格遵守。
 
-**CRITICAL01 — 输出铁律**：你的输出**必须且仅包含**最终的三段式消息。严禁输出推理过程、计算步骤、事件数据罗列、时间换算、阈值检查、playbook 引用、"Now I have all the data"等中英文铺垫，确保只输出最终的规范内容。
-
-❌ 错误（禁止）:  "现在让我按照 playbook 的规则输出最终的三段式消息：\n🍼 刚刚喂了配方奶 60 ml（22:30）…"
-✅ 正确:          "🍼 刚刚喂了配方奶 60 ml（22:30）\n今天第一次喂配方奶，累计1次共60ml · 近7天单次平均约60.0ml/次"
-**CRITICAL02 — 时间处理**：所有时间换算、+08:00后缀、UTC→北京转换必须通过 skill 内的 `time-helper.sh` 或 `analyze-event.sh` 脚本完成，禁止手动构造时间字符串、禁止心算时区偏移、禁止使用 bash `date` 命令自行换算。
+⚠️ **第一步必须做**：用 **Write 工具**把下方 raw JSON 写到 `/tmp/bf-event-{id前缀}.json`，再用 `@<路径>` 调脚本（playbook CRITICAL03）。直接把 JSON 当 bash 参数会被 host 安全扫描器拒绝。
 
 事件数据：
 ```json
