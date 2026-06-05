@@ -142,7 +142,9 @@ def minutes_display(m):
     h = m // 60
     mi = m % 60
     if h > 0:
-        return f"{h}小时{mi}分钟"
+        if mi > 0:
+            return f"{h}小时{mi}分钟"
+        return f"{h}小时"
     return f"{mi}分钟"
 
 def build_value_display(rec):
@@ -629,7 +631,10 @@ if elapsed_min:
     h = elapsed_min // 60
     m = elapsed_min % 60
     if h > 0:
-        elapsed_display = f"{h}小时{m}分钟"
+        if m > 0:
+            elapsed_display = f"{h}小时{m}分钟"
+        else:
+            elapsed_display = f"{h}小时"
     else:
         elapsed_display = f"{m}分钟"
 output["elapsed_display"] = elapsed_display
@@ -876,7 +881,10 @@ elif scenario == "event_window":
                         h = remaining_min // 60
                         m = remaining_min % 60
                         if h > 0:
-                            remaining_display = f"约{h}小时{m}分钟"
+                            if m > 0:
+                                remaining_display = f"约{h}小时{m}分钟"
+                            else:
+                                remaining_display = f"约{h}小时"
                         else:
                             remaining_display = f"约{m}分钟"
                     else:
