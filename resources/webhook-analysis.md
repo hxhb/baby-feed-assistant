@@ -66,6 +66,7 @@
 | `feeding.created` | `bash <SKILL_DIR>/scripts/analyze-event.sh feeding '@/tmp/bf-event-<id>.json'` |
 | `reminder.fired` | `bash <SKILL_DIR>/scripts/analyze-event.sh reminder '@/tmp/bf-event-<id>.json'` |
 | `health.created` (WEIGHT/HEIGHT/TEMP) | `bash query-api.sh GET "/api/health?babyId=X&type=TYPE"` 取历史 |
+| `health.created` (DIAPER) | `bash query-api.sh GET "/api/health?babyId=X&type=DIAPER&date=$(bash <SKILL_DIR>/scripts/time-helper.sh today)"` 取今日累计 |
 | 其他事件 | 不调用额外工具 |
 
 脚本返回结构化 JSON，模型只读取字段值拼接消息。调用失败 → 只分析本次事件，末尾加 `_(历史查询失败)_`。
@@ -91,9 +92,10 @@
 **首行**：`{子类型 emoji} [友好措辞] {子类型中文} {精确数值}{单位}`
 
 - `WEIGHT` / `HEIGHT` / `TEMPERATURE`：查历史 → `[0]` vs `[1]` 判趋势（`↗️ 上升 / → 持平 / ↘️ 下降`），引用前次数值。命中 SKILL.md 红线时温和标出。
-- `DIAPER` / `SLEEP` / `VACCINE` / `MEDICATION` / `AD_VITAMIN`：不查历史，用准确数值回应一句。
+- `DIAPER`：查今日尿布记录 → 统计 pee/poop 次数，在消息中带上当日该类型的累计。格式：`💧 刚记了一次小便（09:00），今天第 2 次啦` 或 `💩 刚记了一次大便（14:05），今天第 1 次`。仅 PEE / POOP 各自计数，BOTH 同时计入两边。
+- `SLEEP` / `VACCINE` / `MEDICATION` / `AD_VITAMIN`：不查历史，用准确数值回应一句。
 
-例：`⚖️ 体重 7.2 kg ↗️（08:30，比上次 7.0 kg 增加 0.2）` / `💩 14:05 换了一次大便`
+例：`⚖️ 体重 7.2 kg ↗️（08:30，比上次 7.0 kg 增加 0.2）` / `💩 刚记了一次大便（14:05），今天第 2 次`
 
 ### 2.3 `memo.created` — 📌
 
