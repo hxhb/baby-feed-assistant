@@ -311,7 +311,15 @@ if last_days and feeding_type != "SOLID_FOOD":
 
     if total_sessions > 0:
         avg_value = total_value / total_sessions
-        this_amount = today_total
+        # This feed's own amount (not today's total) — compare single-feed to single-feed average
+        if feeding_type == "BREAST_MILK":
+            this_amount = (event_data.get("leftBreastDuration", 0) or 0) + (event_data.get("rightBreastDuration", 0) or 0)
+        elif feeding_type == "BREAST_MILK_BOTTLE":
+            this_amount = event_data.get("breastMilkAmount", 0) or 0
+        elif feeding_type == "FORMULA":
+            this_amount = event_data.get("formulaAmount", 0) or 0
+        else:
+            this_amount = 0
         deviation = ((this_amount - avg_value) / avg_value * 100) if avg_value > 0 else 0
 
         avg_display = f"近7天单次平均约{round(avg_value, 1)}{today_unit}/次"
