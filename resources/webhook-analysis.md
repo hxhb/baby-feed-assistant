@@ -10,6 +10,8 @@
 > **CRITICAL02 — 时间处理**：所有时间换算、+08:00后缀、UTC→北京转换必须通过 skill 内的 `time-helper.sh` 或 `analyze-event.sh` 脚本完成，禁止手动构造时间字符串、禁止心算时区偏移、禁止使用 bash `date` 命令自行换算。
 >
 > **CRITICAL03 — JSON 走文件**：调 `analyze-event.sh` 前，先用 **Write 工具**把 raw JSON 写到 `/tmp/bf-event-<id前缀>.json`，再用 `@<路径>` 引用（如 `bash <SKILL_DIR>/scripts/analyze-event.sh reminder '@/tmp/bf-event-a8a24e3a.json'`）。直接把 JSON 当 bash 参数会被 host 的 confusable-Unicode 扫描器拒绝。
+>
+> **CRITICAL04 — Unicode 转义必须走脚本解析**：raw JSON 中的 `\uXXXX` Unicode 转义序列**不能凭模型知识解码**。已有真实案例：模型把 `烁`（烁）误读为 `灿`（灿），导致宝宝名字输出错误。**所有事件类型**，写文件后立即执行 `bash <SKILL_DIR>/scripts/decode-json.sh /tmp/bf-event-<id>.json` 将转义序列解析为实际 UTF-8 字符。任何中文字段（名字、食物名等）只能从解码后的文件或 `analyze-event.sh` 输出中读取，绝不从 raw prompt 中直接解码 `\uXXXX`。
 
 本文档是 baby-feed 应用 incoming webhook 事件的分析手册。用中文回答，≤ 200 字，语气友好温和。
 
@@ -59,7 +61,7 @@
 
 ### 1.3 工具调用
 
-调脚本前先用 **Write 工具**把 raw_json 写到 `/tmp/bf-event-<id>.json`，再用 `@<path>` 引用（详见 SKILL.md "非 ASCII body" 节）。
+**所有事件第一步**：用 **Write 工具**把 raw_json 写到 `/tmp/bf-event-<id>.json` → 立即执行 `bash <SKILL_DIR>/scripts/decode-json.sh /tmp/bf-event-<id>.json` 解析 Unicode 转义 → 再从解码后的文件读取中文字段（详见 SKILL.md "非 ASCII body" 节）。
 
 | 事件类型 | 调用 |
 |----------|------|
@@ -93,7 +95,7 @@
 
 - `WEIGHT` / `HEIGHT` / `TEMPERATURE`：查历史 → `[0]` vs `[1]` 判趋势（`↗️ 上升 / → 持平 / ↘️ 下降`），引用前次数值。命中 SKILL.md 红线时温和标出。
 - `DIAPER`：查今日尿布记录 → 统计 pee/poop 次数，在消息中带上当日该类型的累计。格式：`💧 刚记了一次小便（09:00），今天第 2 次啦` 或 `💩 刚记了一次大便（14:05），今天第 1 次`。仅 PEE / POOP 各自计数，BOTH 同时计入两边。
-- `SLEEP` / `VACCINE` / `MEDICATION` / `AD_VITAMIN`：不查历史，用准确数值回应一句。
+- `SLEEP` / `VACCINE` / `MEDICATION` / `AD_VITAMIN`：不查历史。先 `Read` 解码后的 `/tmp/bf-event-<id>.json` 取字段值（名字、数值、时间），再回应一句。**绝不从 prompt 中的 raw JSON 直接读**。
 
 例：`⚖️ 体重 7.2 kg ↗️（08:30，比上次 7.0 kg 增加 0.2）` / `💩 刚记了一次大便（14:05），今天第 2 次`
 
@@ -189,3 +191,4 @@
 - ❌ 原始 JSON、字段名、HTTP 状态码
 - ❌ 四舍五入后的数值（webhook 数据必须原样引用）
 - ❌ 不存在的阈值建议（阈值未命中时严禁输出建议段）
+- ❌ 凭模型知识解码 raw JSON 中的 `\uXXXX` Unicode 转义序列（必须走 `decode-json.sh` 脚本）

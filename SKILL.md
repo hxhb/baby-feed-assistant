@@ -1,6 +1,6 @@
 ---
 name: baby-feed-assistant
-version: 2.10.5
+version: 2.11.0
 description: "Query and manage baby feeding, health, growth, sleep and reminder data through the Baby Feed HTTP API. Trigger on any English or Chinese mention of: feeding/nursing/formula/breast-milk/solid-food (喂奶/母乳/瓶喂/奶粉/辅食), diapers (尿布/大便/小便), sleep (睡眠/小睡/夜醒), weight/height/temperature (体重/身高/体温), vitamin AD or medication (AD/维生素/用药), vaccines (疫苗/打针), memos and reminders (备忘/待办/提醒), or daily/weekly summaries (今天/本周/情况/统计). Trigger on BOTH queries ('宝宝今天吃了多少', '上次体温', '下次疫苗什么时候') AND recording requests ('记录一下刚喂奶', '宝宝刚拉了'). Also use this skill when handling incoming webhook events: `feeding.created` / `health.created` / `memo.created` / `reminder.fired`, plus their `*.updated` and `*.deleted` variants."
 ---
 
@@ -77,6 +77,16 @@ bash <SKILL_DIR>/scripts/analyze-event.sh reminder '@/tmp/bf-event.json'
 ```
 
 raw JSON 含中文，**必须**走 `@<path>` 文件方式（见上节）。不要绕过 `analyze-event.sh` 手动调 `query-api.sh` 然后自己算——那正是本脚本要消除的流程。
+
+### decode-json.sh — Unicode 转义解析
+
+Webhook payload 中的 `\uXXXX` Unicode 转义序列（如 `烁`=烁）在传给模型前**未经解析**。模型凭知识解码不可靠——曾有真实案例把 烁烁 误读为 灿灿。**所有 webhook 事件**，写文件后立即执行：
+
+```bash
+bash <SKILL_DIR>/scripts/decode-json.sh /tmp/bf-event-<id>.json
+```
+
+该脚本用 Python `json.load()` + `json.dump(ensure_ascii=False)` 将所有 `\uXXXX` 解析为实际 UTF-8 字符。之后再从文件读取中文字段。
 
 ---
 
@@ -241,6 +251,7 @@ raw JSON 含中文，**必须**走 `@<path>` 文件方式（见上节）。不�
 | 手动构造时间字符串（手写 `+08:00`、心算 UTC+8） | 一律走 `time-helper.sh`（`now` / `ensure-tz` / `to-beijing` / `today`） |
 | POST 时一次 `now` 复用到多个 time 字段 | 每个字段**单独调一次** `now`，不缓存 |
 | API 响应时间直接展示（UTC 时间） | 所有展示前的时间串都过 `to-beijing` |
+| 凭模型知识解码 webhook payload 中的 `\uXXXX` 转义序列 | 一律先走 `decode-json.sh` 解析成实际 UTF-8，再读中文字段 |
 
 ---
 
@@ -249,8 +260,8 @@ raw JSON 含中文，**必须**走 `@<path>` 文件方式（见上节）。不�
 当 incoming 消息是本应用的 webhook 事件（`type` 为 `feeding.created` / `health.created` / `memo.created` / `reminder.fired`，或任意 `*.updated` / `*.deleted` 变体）时：
 
 1. 读取 `<SKILL_DIR>/resources/webhook-analysis.md`。
-2. 严格按照其中的规则输出 —— 该文件是 webhook 输出格式、数据精度、工具调用纪律、各事件类型分册、`reminder.fired` 四种场景的**唯一权威**。
-3. 本文档的 wrapper 脚本（§Setup）、时间规则（§时间处理）和 emoji table（§输出规范）依然适用，playbook 通过交叉引用使用，不重复定义。
+2. 严格按照其中的规则输出 —— 该文件是 webhook 输出格式、数据精度、工具调用纪律、Unicode 处理、各事件类型分册、`reminder.fired` 四种场景的**唯一权威**。
+3. 本文档的 wrapper 脚本（§Setup）、`decode-json.sh`（Unicode 解析）、时间规则（§时间处理）和 emoji table（§输出规范）依然适用，playbook 通过交叉引用使用，不重复定义。
 
 每次事件都重新读一遍 playbook，让规则更新立即生效，不要凭记忆分析。
 
@@ -274,6 +285,7 @@ curl -sf "https://raw.githubusercontent.com/hxhb/baby-feed-assistant/refs/heads/
   curl -sf "$BASE/scripts/query-api.sh"           -o "<SKILL_DIR>/scripts/query-api.sh" && chmod +x "<SKILL_DIR>/scripts/query-api.sh"
   curl -sf "$BASE/scripts/time-helper.sh"         -o "<SKILL_DIR>/scripts/time-helper.sh" && chmod +x "<SKILL_DIR>/scripts/time-helper.sh"
   curl -sf "$BASE/scripts/analyze-event.sh"       -o "<SKILL_DIR>/scripts/analyze-event.sh" && chmod +x "<SKILL_DIR>/scripts/analyze-event.sh"
+  curl -sf "$BASE/scripts/decode-json.sh"           -o "<SKILL_DIR>/scripts/decode-json.sh" && chmod +x "<SKILL_DIR>/scripts/decode-json.sh"
   curl -sf "$BASE/references/api.md"              -o "<SKILL_DIR>/references/api.md"
   curl -sf "$BASE/references/time-handling.md"    -o "<SKILL_DIR>/references/time-handling.md"
   curl -sf "$BASE/resources/webhook-analysis.md"  -o "<SKILL_DIR>/resources/webhook-analysis.md"

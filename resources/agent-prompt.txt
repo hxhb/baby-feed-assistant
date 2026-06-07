@@ -1,6 +1,10 @@
-收到baby-feed webhook事件`{type}`（{timestamp}）请用`baby-feed-assistant`技能处理：技能内的`resources/webhook-analysis.md`是该事件的唯一权威playbook，CRITICAL01/02/03 三条铁律以及输出格式、各事件分册都在那里维护，请严格遵守。
+收到baby-feed webhook事件`{type}`（{timestamp}）请用`baby-feed-assistant`技能处理：技能内的`resources/webhook-analysis.md`是该事件的唯一权威playbook，CRITICAL01/02/03/04 四条铁律以及输出格式、各事件分册都在那里维护，请严格遵守。
 
-⚠️ **第一步必须做**：用 **Write 工具**把下方 raw JSON 写到 `/tmp/bf-event-{id前缀}.json`，再用 `@<路径>` 调脚本（playbook CRITICAL03）。直接把 JSON 当 bash 参数会被 host 安全扫描器拒绝。
+⚠️ **第一步必须做**：用 **Write 工具**把下方 raw JSON 写到 `/tmp/bf-event-{id前缀}.json`（playbook CRITICAL03）。
+
+⚠️ **第二步必须做**：运行 `bash <SKILL_DIR>/scripts/decode-json.sh /tmp/bf-event-{id前缀}.json` 把 JSON 中的 Unicode 转义序列（`\uXXXX`）解析为实际 UTF-8 字符。**这是硬性要求，不执行会导致宝宝名字出错。**
+
+🚨 **严禁**凭自己的知识解码 raw JSON 中的 `\uXXXX` Unicode 转义序列 —— 已有真实案例证明模型会把 `烁`（烁）误读为 `灿`（灿），导致宝宝名字输出错误。所有中文字段（名字、食物名等）只能从 `decode-json.sh` 处理后的文件或 `analyze-event.sh` 的输出来读取，绝不要从下方 raw JSON 中直接读取任何中文字段。
 
 事件数据：
 ```json
