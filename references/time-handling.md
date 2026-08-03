@@ -1,67 +1,57 @@
-# Time Handling — UTC+8 (Beijing)
+# Time Handling
 
-All time operations go through `<SKILL_DIR>/scripts/time-helper.sh`. The script
-encodes timezone rules so models don't need to remember them.
+Use `scripts/time-helper.sh` for every date/time conversion. The application groups records by Beijing calendar day (`UTC+08:00`).
 
-## Subcommands
+## Commands
 
-### `now` — current Beijing time, POST-ready
+| Command | Input | Output/use |
+|---|---|---|
+| `now` | none | Current Beijing timestamp, POST-ready |
+| `today` | none | Current Beijing date for `?date=` |
+| `ensure-tz` | ISO timestamp | Assign Beijing to a naive timestamp, or convert an aware timestamp to Beijing |
+| `to-beijing` | timezone-aware ISO timestamp | `YYYY-MM-DD HH:mm` for display |
+| `date-of` | ISO timestamp | Beijing `YYYY-MM-DD` for date-specific queries |
+| `shift` | ISO timestamp, signed minutes | Shift an instant and return a Beijing timestamp |
+| `date-shift` | `YYYY-MM-DD`, signed days | Date arithmetic such as yesterday/tomorrow |
+| `age` | birth timestamp, optional reference timestamp | Calendar age in Chinese |
 
-```bash
-bash time-helper.sh now
-# → 2026-06-04T15:30:00+08:00
-```
-
-Use this for POST body time fields (`startTime`, `endTime`, `recordedAt`,
-`sleepStartTime`, `sleepEndTime`, `scheduledAt`). Re-run for each record — never
-cache the output.
-
-### `today` — current Beijing date, GET-ready
-
-```bash
-bash time-helper.sh today
-# → 2026-06-04
-```
-
-Use this for `?date=` query params. The parameter is a Beijing date; the server
-handles the UTC window internally.
-
-### `to-beijing` — UTC timestamp → display
+Examples:
 
 ```bash
-bash time-helper.sh to-beijing "2026-05-15T07:00:00.000Z"
-# → 2026-05-15 15:00
+bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "2026-06-04T15:00"
+# 2026-06-04T15:00:00+08:00
 
-bash time-helper.sh to-beijing "2026-05-14T23:30:00Z"
-# → 2026-05-15 07:30  (跨天)
+bash <SKILL_DIR>/scripts/time-helper.sh ensure-tz "2026-06-04T07:00:00Z"
+# 2026-06-04T15:00:00+08:00
+
+bash <SKILL_DIR>/scripts/time-helper.sh shift "2026-06-04T15:00:00+08:00" -120
+# 2026-06-04T13:00:00+08:00
+
+bash <SKILL_DIR>/scripts/time-helper.sh date-shift "2026-06-04" -1
+# 2026-06-03
 ```
 
-API responses return timestamps ending in `Z` (UTC). Pipe them through
-`to-beijing` before showing to the user. The script handles date rollover.
+## Recording rules
 
-### `ensure-tz` — guarantee +08:00 suffix
+- Capture one `now` for one record. Reuse that base instant when `recordedAt` and another field intentionally represent the same moment.
+- Derive related times with `shift`; do not call `now` repeatedly and assume the outputs are identical.
+- Get a fresh `now` for a separate record.
+- Preserve an explicit offset supplied by the user semantically: `ensure-tz` converts it to Beijing without changing the instant.
+- Treat a naive ISO timestamp as Beijing wall time.
+- Reject non-ISO or impossible dates. Do not append `+08:00` to arbitrary text.
 
-```bash
-bash time-helper.sh ensure-tz "2026-06-04T15:00"
-# → 2026-06-04T15:00:00+08:00
+## Relative language
 
-bash time-helper.sh ensure-tz "2026-06-04T15:00:00"
-# → 2026-06-04T15:00:00+08:00
+Resolve relative expressions against a freshly captured Beijing `now`:
 
-bash time-helper.sh ensure-tz "2026-06-04T15:00:00+08:00"
-# → 2026-06-04T15:00:00+08:00  (already correct, pass through)
-```
+- `刚刚` / no explicit time: use the captured `now`.
+- `X 分钟前` / `X 小时前`: call `shift BASE -MINUTES`.
+- `昨天` / `明天`: call `date-shift TODAY -1|1`, then combine with the stated clock time and call `ensure-tz`.
+- `昨晚八点` and similar phrases need both a derived date and an explicit clock time.
+- If a phrase can map to more than one instant, ask one short clarification question.
 
-Use this when the user provides a time string that might lack the timezone. Safe
-to call even if the string already has `+08:00` — it's a no-op pass-through.
+For sleep, `sleepStartTime` is required and `sleepEndTime` is optional. When both exist, set `recordedAt` to the wake/logging instant unless the user specified otherwise. Never invent an end time for an ongoing sleep.
 
-## Why script over prompt rules
+## Display rules
 
-Smaller models struggle with timezone arithmetic in prompts. The script removes
-three failure modes:
-
-| Old (prompt rule) | New (script) |
-|---|---|
-| Model forgets `+08:00` suffix on POST | `ensure-tz` guarantees it |
-| Model reuses cached `now` across records | `now` is re-invoked each time |
-| Model miscalculates UTC+8 display, misses date rollover | `to-beijing` handles it deterministically |
+API timestamps normally serialize as UTC `Z`. Convert each timestamp through `to-beijing` before display. Keep date information when the converted date differs from today or when a range crosses midnight.

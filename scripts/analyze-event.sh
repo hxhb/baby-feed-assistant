@@ -14,18 +14,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+QUERY_API_SCRIPT="${BABY_FEED_QUERY_SCRIPT:-$SCRIPT_DIR/query-api.sh}"
 
 # --- Helpers ---
 
 call_api() {
   local result
-  result=$(bash "$SCRIPT_DIR/query-api.sh" "$@" 2>/dev/null) || true
+  result=$(bash "$QUERY_API_SCRIPT" "$@" 2>/dev/null) || return 1
   echo "$result"
 }
 
 call_time() {
   local result
-  result=$(bash "$SCRIPT_DIR/time-helper.sh" "$@" 2>/dev/null) || true
+  result=$(bash "$SCRIPT_DIR/time-helper.sh" "$@" 2>/dev/null) || return 1
   echo "$result"
 }
 
@@ -73,35 +74,42 @@ analyze_feeding() {
   babyId=$(parse_field "$raw_json" "data.babyId" "")
   feedingType=$(parse_field "$raw_json" "data.type" "")
   startTime=$(parse_field "$raw_json" "data.startTime" "")
-  eventId=$(parse_field "$raw_json" "data.id" "")
-  # Root-level "id" is the webhook delivery ID, NOT the feeding record ID.
-  # If data.id is null/missing, leave eventId empty -- the time-based safety
-  # net in the Python block will handle dedup.
+  eventId=$(parse_field "$raw_json" "data.recordId" "")
+  if [[ -z "$eventId" ]]; then
+    # Compatibility with payloads emitted before recordId was standardized.
+    eventId=$(parse_field "$raw_json" "data.id" "")
+  fi
 
-  if [[ -z "$babyId" || -z "$feedingType" ]]; then
-    echo '{"status":"error","error":"Missing babyId or feeding type in raw JSON"}'
+  if [[ -z "$babyId" || -z "$feedingType" || -z "$startTime" ]]; then
+    echo '{"status":"error","error":"Missing babyId, feeding type, or startTime in raw JSON"}'
     return 1
   fi
 
-  local beijing_time today
+  local beijing_time record_date current_date
   beijing_time=$(call_time to-beijing "$startTime")
-  today=$(call_time today)
+  record_date=$(call_time date-of "$startTime")
+  current_date=$(call_time today)
 
-  local feeding_data
-  feeding_data=$(call_api GET "/api/feeding?babyId=$babyId&date=$today" "" "")
+  local feeding_data feeding_available="true"
+  if ! feeding_data=$(call_api GET "/api/feeding?babyId=$babyId&date=$record_date" "" ""); then
+    feeding_data=""
+    feeding_available="false"
+  fi
 
-  local stats_data
-  stats_data=$(call_api GET "/api/stats?babyId=$babyId&days=7" "" "")
+  local stats_data="" stats_available="not_applicable"
+  if [[ "$record_date" == "$current_date" ]]; then
+    stats_available="true"
+    if ! stats_data=$(call_api GET "/api/stats?babyId=$babyId&days=7" "" ""); then
+      stats_data=""
+      stats_available="false"
+    fi
+  fi
 
-  local yesterday
-  yesterday=$(python3 << PYEOF 2>/dev/null
-from datetime import date, timedelta
-print((date.today() + timedelta(days=-1)).isoformat())
-PYEOF
-)
-  local yesterday_feedings=""
-  if [[ -n "$yesterday" ]]; then
-    yesterday_feedings=$(call_api GET "/api/feeding?babyId=$babyId&date=$yesterday" "" "")
+  local previous_date
+  previous_date=$(call_time date-shift "$record_date" -1)
+  local previous_date_feedings=""
+  if [[ -n "$previous_date" ]]; then
+    previous_date_feedings=$(call_api GET "/api/feeding?babyId=$babyId&date=$previous_date" "" "" || true)
   fi
 
   export RAW_JSON="$raw_json"
@@ -110,10 +118,13 @@ PYEOF
   export FEEDING_TYPE="$feedingType"
   export START_TIME="$startTime"
   export BEIJING_TIME="$beijing_time"
-  export TODAY="$today"
+  export RECORD_DATE="$record_date"
+  export CURRENT_DATE="$current_date"
   export FEEDING_DATA="$feeding_data"
   export STATS_DATA="$stats_data"
-  export YESTERDAY_FEEDINGS="$yesterday_feedings"
+  export PREVIOUS_DATE_FEEDINGS="$previous_date_feedings"
+  export FEEDING_AVAILABLE="$feeding_available"
+  export STATS_AVAILABLE="$stats_available"
 
   python3 << 'PYEOF' 2>&1
 import os, sys, json
@@ -175,7 +186,9 @@ event_id = os.environ["EVENT_ID"]
 feeding_type = os.environ["FEEDING_TYPE"]
 start_time_str = os.environ["START_TIME"]
 beijing_time_str = os.environ["BEIJING_TIME"]
-today = os.environ["TODAY"]
+record_date = os.environ["RECORD_DATE"]
+current_date = os.environ["CURRENT_DATE"]
+is_today = record_date == current_date
 
 feeder = FEEDING_MAP.get(feeding_type, {"emoji": "\U0001f37c", "label": feeding_type})
 
@@ -211,25 +224,25 @@ def parse_feedings(raw_str):
         return []
 
 feedings = parse_feedings(os.environ["FEEDING_DATA"])
-yesterday_list = parse_feedings(os.environ.get("YESTERDAY_FEEDINGS", ""))
+previous_date_list = parse_feedings(os.environ.get("PREVIOUS_DATE_FEEDINGS", ""))
 
-all_recent = [f for f in feedings if str(f.get("id")) != str(event_id)]
-
-# Safety net: if ID filtering failed (event_id empty / type mismatch), also skip
-# the first element when its startTime matches the current event (within 60s).
-if all_recent and start_time_str:
+all_recent = []
+if start_time_str:
     try:
-        first_start = all_recent[0].get("startTime", "")
-        if first_start:
-            first_dt = parse_utc(first_start)
-            curr_dt = parse_utc(start_time_str)
-            if abs((first_dt - curr_dt).total_seconds()) < 60:
-                all_recent.pop(0)
-    except:
-        pass
-
-if not all_recent and yesterday_list:
-    all_recent = yesterday_list
+        curr_dt = parse_utc(start_time_str)
+        for record in feedings + previous_date_list:
+            if event_id and str(record.get("id")) == str(event_id):
+                continue
+            previous_start = record.get("startTime", "")
+            if not previous_start:
+                continue
+            previous_dt = parse_utc(previous_start)
+            if previous_dt < curr_dt:
+                all_recent.append((previous_dt, record))
+        all_recent.sort(key=lambda item: item[0], reverse=True)
+        all_recent = [item[1] for item in all_recent]
+    except Exception:
+        all_recent = []
 
 interval_section = None
 if all_recent and start_time_str:
@@ -239,7 +252,7 @@ if all_recent and start_time_str:
         try:
             prev_utc = parse_utc(prev_start)
             curr_utc = parse_utc(start_time_str)
-            diff = abs(curr_utc - prev_utc)
+            diff = curr_utc - prev_utc
             interval_min = int(diff.total_seconds() / 60)
             prev_bj = to_beijing(prev_utc)
             prev_feeder = FEEDING_MAP.get(prev.get("type", ""), {"emoji": "\U0001f37c", "label": prev.get("type", "")})
@@ -254,31 +267,34 @@ if all_recent and start_time_str:
         except:
             pass
 
-today_sessions = [f for f in feedings if f.get("type") == feeding_type]
-today_total = 0
-today_unit = ""
+day_sessions = [f for f in feedings if f.get("type") == feeding_type]
+day_total = 0
+day_unit = ""
 
 if feeding_type == "BREAST_MILK":
-    today_total = sum((f.get("leftBreastDuration", 0) or 0) + (f.get("rightBreastDuration", 0) or 0) for f in today_sessions)
-    today_unit = "分钟"
+    day_total = sum((f.get("leftBreastDuration", 0) or 0) + (f.get("rightBreastDuration", 0) or 0) for f in day_sessions)
+    day_unit = "分钟"
 elif feeding_type == "BREAST_MILK_BOTTLE":
-    today_total = sum(f.get("breastMilkAmount", 0) or 0 for f in today_sessions)
-    today_unit = "ml"
+    day_total = sum(f.get("breastMilkAmount", 0) or 0 for f in day_sessions)
+    day_unit = "ml"
 elif feeding_type == "FORMULA":
-    today_total = sum(f.get("formulaAmount", 0) or 0 for f in today_sessions)
-    today_unit = "ml"
+    day_total = sum(f.get("formulaAmount", 0) or 0 for f in day_sessions)
+    day_unit = "ml"
 
-sessions_count = len(today_sessions)
+sessions_count = len(day_sessions)
+day_label = "今天" if is_today else record_date
 if feeding_type != "SOLID_FOOD":
-    today_display = f"今天累计{feeder['label']}{sessions_count}次共{int(today_total)}{today_unit}"
+    day_display = f"{day_label}累计{feeder['label']}{sessions_count}次共{int(day_total)}{day_unit}"
 else:
-    today_display = f"今天累计{feeder['label']}{sessions_count}次"
+    day_display = f"{day_label}累计{feeder['label']}{sessions_count}次"
 
-today_section = {
+day_section = {
+    "date": record_date,
+    "is_today": is_today,
     "same_type_sessions": sessions_count,
-    "same_type_total": int(today_total),
-    "unit": today_unit,
-    "display": today_display,
+    "same_type_total": int(day_total),
+    "unit": day_unit,
+    "display": day_display,
 }
 
 week_section = None
@@ -322,77 +338,58 @@ if last_days and feeding_type != "SOLID_FOOD":
             this_amount = 0
         deviation = ((this_amount - avg_value) / avg_value * 100) if avg_value > 0 else 0
 
-        avg_display = f"近7天单次平均约{round(avg_value, 1)}{today_unit}/次"
+        avg_display = f"近7天单次平均约{round(avg_value, 1)}{day_unit}/次"
         if abs(deviation) > 2:
             direction = "多" if deviation > 0 else "少"
             avg_display += f"，这次{direction}{abs(round(deviation))}%"
 
         week_section = {
             "value": round(avg_value, 1),
-            "unit": f"{today_unit}/次",
+            "unit": f"{day_unit}/次",
             "total_sessions": total_sessions,
             "total_value": round(total_value, 1),
             "deviation_percent": round(deviation, 1),
             "display": avg_display,
         }
 
-thresholds = {
+attention = {
     "interval_short": False,
     "interval_long": False,
     "deviation_above": False,
     "deviation_below": False,
-    "daily_low": False,
     "any_hit": False,
 }
-threshold_details = []
+attention_details = []
 
 if interval_section:
     im = interval_section["minutes"]
     if im < 90:
-        thresholds["interval_short"] = True
-        threshold_details.append(f"距上次仅{minutes_display(im)}，间隔偏短（<1.5小时）")
+        attention["interval_short"] = True
+        attention_details.append(f"距上次仅{minutes_display(im)}，可结合平时喂养节奏观察")
     elif im > 300:
-        thresholds["interval_long"] = True
-        threshold_details.append(f"距上次{minutes_display(im)}，间隔偏长（>5小时）")
+        attention["interval_long"] = True
+        attention_details.append(f"距上次{minutes_display(im)}，已超过5小时")
 
 if week_section:
     dev = week_section["deviation_percent"]
     if dev > 30:
-        thresholds["deviation_above"] = True
-        threshold_details.append(f"本次比7日均值高{dev}%，明显偏多（>+30%）")
+        attention["deviation_above"] = True
+        attention_details.append(f"本次比近7日单次均值高约{dev}%")
     elif dev < -30:
-        thresholds["deviation_below"] = True
-        threshold_details.append(f"本次比7日均值低{abs(dev)}%，明显偏少（<-30%）")
+        attention["deviation_below"] = True
+        attention_details.append(f"本次比近7日单次均值低约{abs(dev)}%")
 
-if last_days and len(last_days) >= 2 and feeding_type != "SOLID_FOOD" and today_total > 0:
-    recent_days = last_days[1:4]
-    recent_total = 0
-    for day in recent_days:
-        if feeding_type == "BREAST_MILK":
-            recent_total += day.get("totalBreastDuration", 0) or 0
-        elif feeding_type == "BREAST_MILK_BOTTLE":
-            recent_total += day.get("totalBreastMilkAmount", 0) or 0
-        elif feeding_type == "FORMULA":
-            recent_total += day.get("totalFormulaAmount", 0) or 0
-    if len(recent_days) > 0 and recent_total > 0:
-        avg_3day = recent_total / len(recent_days)
-        if today_total < avg_3day * 0.8:
-            thresholds["daily_low"] = True
-            pct = round((1 - today_total / avg_3day) * 100)
-            threshold_details.append(f"今天总量较近{len(recent_days)}日均值低约{pct}%（24h总量偏低）")
-
-thresholds["any_hit"] = any([
-    thresholds["interval_short"], thresholds["interval_long"],
-    thresholds["deviation_above"], thresholds["deviation_below"],
-    thresholds["daily_low"],
+attention["any_hit"] = any([
+    attention["interval_short"], attention["interval_long"],
+    attention["deviation_above"], attention["deviation_below"],
 ])
 
 status = "ok"
 errors = []
-if not os.environ.get("FEEDING_DATA", "").strip():
+if os.environ.get("FEEDING_AVAILABLE") != "true":
     status = "partial"
-    errors.append("Today feeding data unavailable")
-if not os.environ.get("STATS_DATA", "").strip():
+    errors.append("Event-date feeding data unavailable")
+if os.environ.get("STATS_AVAILABLE") == "false":
     status = "partial"
     errors.append("7-day stats unavailable")
 
@@ -401,10 +398,9 @@ output = {
     "babyId": baby_id,
     "event": event_section,
     "interval": interval_section,
-    "today": today_section,
+    "day": day_section,
     "week_avg": week_section,
-    "thresholds": thresholds,
-    "threshold_details": threshold_details,
+    "attention": {**attention, "details": attention_details},
 }
 if errors:
     output["errors"] = errors
@@ -437,20 +433,26 @@ analyze_reminder() {
     return 1
   fi
 
-  local scenario="" extra_data="" extra_data2=""
+  local scenario="" extra_data="" history_available="true"
 
   if [[ "$triggerType" == "interval" && "$ruleName" == *"喂养超时提醒"* ]]; then
     scenario="feeding_timeout"
     local today
     today=$(call_time today)
-    extra_data=$(call_api GET "/api/feeding?babyId=$babyId&date=$today" "" "")
+    if ! extra_data=$(call_api GET "/api/feeding?babyId=$babyId&date=$today" "" ""); then
+      extra_data=""
+      history_available="false"
+    fi
     export TODAY="$today"
 
-  elif [[ "$triggerType" == "interval" && "$ruleName" == *"睡眠超时"* ]]; then
+  elif [[ "$triggerType" == "interval" && ( "$ruleName" == *"睡眠超时"* || "$ruleName" == *"睡眠提醒"* || "$ruleName" == *"小睡"* || "$ruleName" == *"该睡"* ) ]]; then
     scenario="sleep_timeout"
     local today
     today=$(call_time today)
-    extra_data=$(call_api GET "/api/sleep-summary?babyId=$babyId&date=$today" "" "")
+    if ! extra_data=$(call_api GET "/api/sleep-summary?babyId=$babyId&date=$today" "" ""); then
+      extra_data=""
+      history_available="false"
+    fi
     export TODAY="$today"
 
   elif [[ "$triggerType" == "interval" && "$ruleName" == *"健康定期提醒"* ]]; then
@@ -459,7 +461,10 @@ analyze_reminder() {
 
     if echo "$title" | grep -qE "体重"; then
       local w
-      w=$(call_api GET "/api/health?babyId=$babyId&type=WEIGHT" "" "d[:2]" 2>/dev/null || echo "[]")
+      if ! w=$(call_api GET "/api/health?babyId=$babyId&type=WEIGHT" "" "[:2]" 2>/dev/null); then
+        w="[]"
+        history_available="false"
+      fi
       [[ -z "$w" ]] && w="[]"
       export CURRENT_HM="$health_map"
       export W_DATA="$w"
@@ -478,7 +483,10 @@ PYEOF
 
     if echo "$title" | grep -qE "身高"; then
       local h
-      h=$(call_api GET "/api/health?babyId=$babyId&type=HEIGHT" "" "d[:2]" 2>/dev/null || echo "[]")
+      if ! h=$(call_api GET "/api/health?babyId=$babyId&type=HEIGHT" "" "[:2]" 2>/dev/null); then
+        h="[]"
+        history_available="false"
+      fi
       [[ -z "$h" ]] && h="[]"
       export CURRENT_HM="$health_map"
       export H_DATA="$h"
@@ -497,7 +505,10 @@ PYEOF
 
     if echo "$title" | grep -qE "体温"; then
       local t
-      t=$(call_api GET "/api/health?babyId=$babyId&type=TEMPERATURE" "" "d[:2]" 2>/dev/null || echo "[]")
+      if ! t=$(call_api GET "/api/health?babyId=$babyId&type=TEMPERATURE" "" "[:2]" 2>/dev/null); then
+        t="[]"
+        history_available="false"
+      fi
       [[ -z "$t" ]] && t="[]"
       export CURRENT_HM="$health_map"
       export T_DATA="$t"
@@ -511,9 +522,54 @@ except:
 d["TEMPERATURE"] = t_data
 print(json.dumps(d, ensure_ascii=False))
 PYEOF
+      )
+    fi
+
+    if echo "$title $body" | grep -qE "尿布|大小便|小便|大便"; then
+      local d
+      if ! d=$(call_api GET "/api/health?babyId=$babyId&type=DIAPER" "" "[:2]" 2>/dev/null); then
+        d="[]"
+        history_available="false"
+      fi
+      export CURRENT_HM="$health_map"
+      export D_DATA="$d"
+      health_map=$(python3 << 'PYEOF' 2>/dev/null
+import json, os
+d = json.loads(os.environ["CURRENT_HM"])
+try:
+    records = json.loads(os.environ["D_DATA"])
+except Exception:
+    records = []
+d["DIAPER"] = records
+print(json.dumps(d, ensure_ascii=False))
+PYEOF
+)
+    fi
+
+    if echo "$title $body" | grep -qE "睡眠|小睡|睡觉"; then
+      local s
+      if ! s=$(call_api GET "/api/health?babyId=$babyId&type=SLEEP" "" "[:2]" 2>/dev/null); then
+        s="[]"
+        history_available="false"
+      fi
+      export CURRENT_HM="$health_map"
+      export S_DATA="$s"
+      health_map=$(python3 << 'PYEOF' 2>/dev/null
+import json, os
+d = json.loads(os.environ["CURRENT_HM"])
+try:
+    records = json.loads(os.environ["S_DATA"])
+except Exception:
+    records = []
+d["SLEEP"] = records
+print(json.dumps(d, ensure_ascii=False))
+PYEOF
 )
     fi
     extra_data="$health_map"
+
+  elif [[ "$triggerType" == "interval" ]]; then
+    scenario="generic_interval"
 
   elif [[ "$triggerType" == "cron" ]]; then
     scenario="cron"
@@ -538,15 +594,25 @@ PYEOF
     export TODAY="$today"
 
     if [[ -n "$dedup_type" ]]; then
-      extra_data=$(call_api GET "/api/health?babyId=$babyId&type=$dedup_type&date=$today" "" "" 2>/dev/null || echo "")
+      if ! extra_data=$(call_api GET "/api/health?babyId=$babyId&type=$dedup_type&date=$today" "" "" 2>/dev/null); then
+        extra_data=""
+        history_available="false"
+      fi
     fi
 
   elif [[ "$triggerType" == "event_window" ]]; then
-    scenario="event_window"
-    extra_data=$(call_api GET "/api/health?babyId=$babyId&type=TEMPERATURE" "" "d[:3]" 2>/dev/null || echo "[]")
-    local now_ts
-    now_ts=$(call_time now 2>/dev/null || echo "")
-    export NOW_TS="$now_ts"
+    if [[ "$ruleName" == *"疫苗"* || "$title" == *"疫苗"* || "$body" == *"疫苗"* || "$title" == *"测体温"* ]]; then
+      scenario="vaccine_event_window"
+      if ! extra_data=$(call_api GET "/api/health?babyId=$babyId&type=TEMPERATURE" "" "[:3]" 2>/dev/null); then
+        extra_data="[]"
+        history_available="false"
+      fi
+      local now_ts
+      now_ts=$(call_time now 2>/dev/null || echo "")
+      export NOW_TS="$now_ts"
+    else
+      scenario="generic_event_window"
+    fi
 
   else
     scenario="unknown"
@@ -558,6 +624,7 @@ PYEOF
   export BABY_NAME="$babyName"
   export TRIGGER_TYPE="$triggerType"
   export RULE_NAME="$ruleName"
+  export HISTORY_AVAILABLE="$history_available"
 
   python3 << 'PYEOF' 2>&1
 import os, sys, json
@@ -571,7 +638,7 @@ TYPE_MAP = {
     "TEMPERATURE":        {"emoji": "\U0001f321️", "label": "体温"},
     "WEIGHT":             {"emoji": "⚖️", "label": "体重"},
     "HEIGHT":             {"emoji": "\U0001f4cf", "label": "身高"},
-    "DIAPER":             {"emoji": "\U0001f4a7", "label": "尿布"},
+    "DIAPER":             {"emoji": "\U0001f4a7", "label": "大小便"},
     "SLEEP":              {"emoji": "\U0001f634", "label": "睡眠"},
     "VACCINE":            {"emoji": "\U0001f489", "label": "疫苗"},
     "MEDICATION":         {"emoji": "\U0001f48a", "label": "用药"},
@@ -621,6 +688,25 @@ def build_value_display(rec):
         return f"{rec.get('height', rec.get('value', '?'))} cm"
     elif t == "SOLID_FOOD":
         return f"{rec.get('solidFoodName', '')} {rec.get('solidFoodAmount', '')}".strip()
+    elif t == "DIAPER":
+        labels = {"PEE": "小便", "POOP": "大便", "BOTH": "大小便"}
+        label = labels.get(rec.get("diaperType", ""), "大小便")
+        status = rec.get("diaperStatus", "") or ""
+        return f"{label} {status}".strip()
+    elif t == "SLEEP":
+        start = rec.get("sleepStartTime", "")
+        end = rec.get("sleepEndTime", "")
+        try:
+            if start and end:
+                start_dt = parse_utc(start)
+                end_dt = parse_utc(end)
+                duration = max(0, int((end_dt - start_dt).total_seconds() / 60))
+                return f"{fmt_short(to_beijing(start_dt))} → {fmt_short(to_beijing(end_dt))}，{minutes_display(duration)}"
+            if start:
+                return f"{fmt_short(to_beijing(parse_utc(start)))}开始（进行中）"
+        except Exception:
+            pass
+        return "睡眠记录"
     return ""
 
 raw = json.loads(os.environ["RAW_JSON"])
@@ -631,7 +717,16 @@ title = event_data.get("title", "")
 body = event_data.get("body", "")
 context = event_data.get("context", {})
 
-output = {"status": "ok", "scenario": scenario, "emoji": "⏰"}
+history_available = os.environ.get("HISTORY_AVAILABLE") == "true"
+output = {
+    "status": "ok" if history_available else "partial",
+    "scenario": scenario,
+    "emoji": "⏰",
+    "babyName": baby_name,
+    "title": title,
+    "body": body,
+    "history_available": history_available,
+}
 
 elapsed_min = context.get("elapsedMinutes", 0) or 0
 elapsed_display = ""
@@ -756,7 +851,7 @@ elif scenario == "health_regular":
     output["elapsed_days"] = elapsed_min // 1440 if elapsed_min else 0
 
     items = []
-    for htype in ["WEIGHT", "HEIGHT", "TEMPERATURE"]:
+    for htype in ["WEIGHT", "HEIGHT", "TEMPERATURE", "DIAPER", "SLEEP"]:
         records = health_map.get(htype, [])
         if not records:
             continue
@@ -766,6 +861,8 @@ elif scenario == "health_regular":
         item["latest_value_display"] = build_value_display(latest)
 
         latest_time = latest.get("recordedAt", latest.get("startTime", ""))
+        if htype == "SLEEP":
+            latest_time = latest.get("sleepEndTime") or latest.get("sleepStartTime") or latest_time
         if latest_time:
             try:
                 dt = to_beijing(parse_utc(latest_time))
@@ -773,7 +870,7 @@ elif scenario == "health_regular":
             except:
                 item["latest_date_display"] = latest_time
 
-        if len(records) >= 2:
+        if len(records) >= 2 and htype in ("WEIGHT", "HEIGHT", "TEMPERATURE"):
             prev_rec = records[1]
             def get_val(r, t):
                 if t == "WEIGHT": return r.get("weight", 0) or 0
@@ -813,6 +910,7 @@ elif scenario == "cron":
             records = []
 
     output["already_done"] = len(records) > 0
+    output["generic"] = not bool(dedup_type)
 
     if records:
         latest = records[0]
@@ -825,8 +923,8 @@ elif scenario == "cron":
                 output["already_done_time_short"] = rec_time
         output["already_done_display"] = f"今天 {output.get('already_done_time_short', '')} 已经{type_info['label']}过啦"
 
-# ── scenario: event_window ──
-elif scenario == "event_window":
+# ── scenario: vaccine_event_window ──
+elif scenario == "vaccine_event_window":
     temp_raw = os.environ.get("EXTRA_DATA", "[]")
     temps = []
     if temp_raw and temp_raw.strip():
@@ -849,9 +947,9 @@ elif scenario == "event_window":
         temp_val = latest_temp.get("temperature", 0) or 0
         temp_status = "正常"
         if temp_val >= 38.5:
-            temp_status = "发烧"
+            temp_status = "明显偏高"
         elif temp_val >= 37.5:
-            temp_status = "低烧"
+            temp_status = "偏高"
 
         temp_time = latest_temp.get("recordedAt", "")
         temp_time_short = ""
@@ -864,8 +962,8 @@ elif scenario == "event_window":
 
         status_labels = {
             "正常": "正常",
-            "低烧": "有点低烧，留意观察",
-            "发烧": "已经发烧，建议尽快就医",
+            "偏高": "读数偏高，建议复测并留意状态",
+            "明显偏高": "读数明显偏高，建议及时咨询医生",
         }
         output["latest_temperature"] = {
             "value_display": f"{temp_val}°C",
@@ -909,12 +1007,14 @@ elif scenario == "event_window":
         except:
             output["window"] = {"remaining_display": "?", "end_display": window_end_str}
 
+# ── generic reminders ──
+elif scenario in ("generic_interval", "generic_event_window"):
+    pass
+
 # ── fallback ──
 else:
     output["status"] = "unknown_scenario"
     output["error"] = f"Unrecognized reminder scenario: triggerType={os.environ.get('TRIGGER_TYPE','')}, ruleName={os.environ.get('RULE_NAME','')}"
-    output["title"] = title
-    output["body"] = body
 
 print(json.dumps(output, ensure_ascii=False, indent=2))
 PYEOF
