@@ -114,6 +114,7 @@ Sorted by `recordedAt` descending.
 - `type` plus `date`: that type on the selected day.
 - `date` only: all health types on that day.
 - For daily sleep totals and cross-midnight segments, use `/api/sleep-summary` instead.
+- A `type`-only response is history, not a freshness guarantee. For current-day status use `date`; for event-window analysis compare `recordedAt` against the rule's `triggerConfig.anchorTime` before presenting a row as part of that event.
 
 ### Create
 

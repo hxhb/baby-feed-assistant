@@ -420,9 +420,10 @@ analyze_reminder() {
     return 1
   fi
 
-  local triggerType ruleName babyId babyName title body
+  local triggerType ruleName ruleId babyId babyName title body
   triggerType=$(parse_field "$raw_json" "data.triggerType" "")
   ruleName=$(parse_field "$raw_json" "data.ruleName" "")
+  ruleId=$(parse_field "$raw_json" "data.ruleId" "")
   babyId=$(parse_field "$raw_json" "data.babyId" "")
   babyName=$(parse_field "$raw_json" "data.babyName" "")
   title=$(parse_field "$raw_json" "data.title" "")
@@ -603,13 +604,24 @@ PYEOF
   elif [[ "$triggerType" == "event_window" ]]; then
     if [[ "$ruleName" == *"疫苗"* || "$title" == *"疫苗"* || "$body" == *"疫苗"* || "$title" == *"测体温"* ]]; then
       scenario="vaccine_event_window"
-      if ! extra_data=$(call_api GET "/api/health?babyId=$babyId&type=TEMPERATURE" "" "[:3]" 2>/dev/null); then
+      local rule_data="[]"
+      local context_anchor
+      context_anchor=$(parse_field "$raw_json" "data.context.anchorTime" "")
+      if [[ -z "$context_anchor" ]]; then
+        if ! rule_data=$(call_api GET "/api/reminders?babyId=$babyId" "" "" 2>/dev/null); then
+          rule_data="[]"
+        fi
+      fi
+      if ! extra_data=$(call_api GET "/api/health?babyId=$babyId&type=TEMPERATURE" "" "" 2>/dev/null); then
         extra_data="[]"
         history_available="false"
       fi
       local now_ts
       now_ts=$(call_time now 2>/dev/null || echo "")
       export NOW_TS="$now_ts"
+      export RULE_ID="$ruleId"
+      export RULE_DATA="$rule_data"
+      export CONTEXT_ANCHOR="$context_anchor"
     else
       scenario="generic_event_window"
     fi
@@ -938,12 +950,77 @@ elif scenario == "vaccine_event_window":
     vaccine_info = os.environ.get("RULE_NAME", "").replace("疫苗后测体温", "").strip().lstrip("· ")
     slot = context.get("slot", "?")
     window_end_str = context.get("windowEnd", "")
+    anchor_time_str = os.environ.get("CONTEXT_ANCHOR", "")
+
+    if not anchor_time_str:
+        rule_raw = os.environ.get("RULE_DATA", "[]")
+        try:
+            rules = json.loads(rule_raw)
+            if not isinstance(rules, list):
+                rules = []
+        except Exception:
+            rules = []
+        rule_id = os.environ.get("RULE_ID", "")
+        matched_rule = next((rule for rule in rules if str(rule.get("id", "")) == rule_id), None) if rule_id else None
+        if matched_rule:
+            config = matched_rule.get("triggerConfig", {})
+            if isinstance(config, dict):
+                anchor_time_str = config.get("anchorTime", "") or ""
 
     output["vaccine_info"] = vaccine_info
     output["slot"] = slot
 
-    if temps:
-        latest_temp = temps[0]
+    anchor_time = None
+    now_time = None
+    window_end_time = None
+    if anchor_time_str:
+        try:
+            anchor_time = parse_utc(anchor_time_str)
+        except Exception:
+            anchor_time = None
+    now_str = os.environ.get("NOW_TS", "")
+    if now_str:
+        try:
+            now_time = parse_utc(now_str)
+        except Exception:
+            now_time = None
+    if window_end_str:
+        try:
+            window_end_time = parse_utc(window_end_str)
+        except Exception:
+            window_end_time = None
+
+    observation_end = now_time
+    if window_end_time is not None and (observation_end is None or window_end_time < observation_end):
+        observation_end = window_end_time
+
+    window_temps = []
+    if anchor_time is not None:
+        for temp in temps:
+            try:
+                recorded_at = parse_utc(temp.get("recordedAt", ""))
+            except Exception:
+                continue
+            if recorded_at >= anchor_time and (observation_end is None or recorded_at <= observation_end):
+                window_temps.append((recorded_at, temp))
+        window_temps.sort(key=lambda item: item[0], reverse=True)
+
+    if not history_available:
+        observation_status = "history_unavailable"
+    elif anchor_time is None:
+        observation_status = "window_start_unavailable"
+    elif window_temps:
+        observation_status = "recorded_in_window"
+    else:
+        observation_status = "none_in_window"
+
+    output["temperature_observation"] = {
+        "status": observation_status,
+        "anchor_time_display": fmt_date_short(to_beijing(anchor_time)) if anchor_time else None,
+    }
+
+    if window_temps:
+        latest_temp_time, latest_temp = window_temps[0]
         temp_val = latest_temp.get("temperature", 0) or 0
         temp_status = "正常"
         if temp_val >= 38.5:
@@ -951,14 +1028,7 @@ elif scenario == "vaccine_event_window":
         elif temp_val >= 37.5:
             temp_status = "偏高"
 
-        temp_time = latest_temp.get("recordedAt", "")
-        temp_time_short = ""
-        if temp_time:
-            try:
-                dt = to_beijing(parse_utc(temp_time))
-                temp_time_short = fmt_short(dt)
-            except:
-                temp_time_short = temp_time
+        temp_time_bj = to_beijing(latest_temp_time)
 
         status_labels = {
             "正常": "正常",
@@ -967,7 +1037,7 @@ elif scenario == "vaccine_event_window":
         }
         output["latest_temperature"] = {
             "value_display": f"{temp_val}°C",
-            "time_short": temp_time_short,
+            "time_display": fmt_date_short(temp_time_bj),
             "status": temp_status,
             "status_label": status_labels.get(temp_status, temp_status),
         }

@@ -152,7 +152,7 @@ esac
         update = json.loads(result.stdout)
         assert update["status"] == "update_available"
         assert update["updateAvailable"] is True
-        assert update["localVersion"] == "2.12.0"
+        assert update["localVersion"] == "2.12.1"
         assert update["remoteVersion"] == "2.13.0"
         assert update["behind"] == 3
 
@@ -169,7 +169,9 @@ esac
 MOCK_QUERY = r'''#!/usr/bin/env bash
 set -euo pipefail
 endpoint="${2:-}"
-if [[ "$endpoint" == *"/api/stats?"* ]]; then
+if [[ "$endpoint" == *"/api/reminders?"* ]]; then
+  printf '%s\n' '[{"id":"vaccine-rule","triggerType":"event_window","triggerConfig":{"anchorTime":"2026-08-04T01:35:00Z","windowHours":72,"repeatIntervalMinutes":300}}]'
+elif [[ "$endpoint" == *"/api/stats?"* ]]; then
   printf '%s\n' '{"lastDays":[{"formulaCount":2,"totalFormulaAmount":200}],"todayStats":{}}'
 elif [[ "$endpoint" == *"/api/feeding?"* ]]; then
   printf '%s\n' '[{"id":"feed-current","type":"FORMULA","startTime":"2026-06-04T06:00:00Z","formulaAmount":120},{"id":"feed-previous","type":"FORMULA","startTime":"2026-06-04T03:00:00Z","formulaAmount":80}]'
@@ -178,7 +180,7 @@ elif [[ "$endpoint" == *"/api/sleep-summary?"* ]]; then
 elif [[ "$endpoint" == *"type=DIAPER"* ]]; then
   printf '%s\n' '[{"id":"health-1","type":"DIAPER","diaperType":"POOP","diaperStatus":"正常","recordedAt":"2026-06-04T06:00:00Z"}]'
 elif [[ "$endpoint" == *"type=TEMPERATURE"* ]]; then
-  printf '%s\n' '[{"id":"temp-1","type":"TEMPERATURE","temperature":37.2,"recordedAt":"2026-06-04T06:00:00Z"}]'
+  printf '%s\n' '[{"id":"temp-old","type":"TEMPERATURE","temperature":37.0,"recordedAt":"2026-07-11T10:06:00Z"}]'
 else
   printf '%s\n' '[]'
 fi
@@ -328,12 +330,75 @@ def test_analyze_event() -> None:
         assert health["items"][0]["type"] == "DIAPER"
         assert health["items"][0]["latest_value_display"] == "大便 正常"
 
+        vaccine_without_new_temperature = analyze(
+            mock_query,
+            "reminder",
+            {
+                "type": "reminder.fired",
+                "data": {
+                    "ruleId": "vaccine-rule",
+                    "triggerType": "event_window",
+                    "ruleName": "疫苗后测体温 · 流脑ACYW 第2针",
+                    "babyId": "baby-id",
+                    "babyName": "烁烁",
+                    "title": "该给烁烁测体温了",
+                    "body": "疫苗接种后体温监测 · 流脑ACYW 第2针",
+                    "context": {"slot": 1, "windowEnd": "2026-08-07T01:35:00Z"},
+                },
+            },
+        )
+        assert vaccine_without_new_temperature["scenario"] == "vaccine_event_window"
+        assert vaccine_without_new_temperature["temperature_observation"] == {
+            "status": "none_in_window",
+            "anchor_time_display": "08-04 09:35",
+        }
+        assert "latest_temperature" not in vaccine_without_new_temperature
+
+        positive_query = Path(directory) / "positive-query.sh"
+        positive_query.write_text(
+            MOCK_QUERY.replace(
+                '[{"id":"temp-old","type":"TEMPERATURE","temperature":37.0,"recordedAt":"2026-07-11T10:06:00Z"}]',
+                '[{"id":"temp-after-window","type":"TEMPERATURE","temperature":39.0,"recordedAt":"2026-08-08T01:36:00Z"},'
+                '{"id":"temp-current-window","type":"TEMPERATURE","temperature":37.2,"recordedAt":"2026-08-04T01:36:00Z"},'
+                '{"id":"temp-old","type":"TEMPERATURE","temperature":37.0,"recordedAt":"2026-07-11T10:06:00Z"}]',
+            ),
+            encoding="utf-8",
+        )
+        vaccine_with_new_temperature = analyze(
+            positive_query,
+            "reminder",
+            {
+                "type": "reminder.fired",
+                "data": {
+                    "ruleId": "vaccine-rule",
+                    "triggerType": "event_window",
+                    "ruleName": "疫苗后测体温 · 流脑ACYW 第2针",
+                    "babyId": "baby-id",
+                    "babyName": "烁烁",
+                    "title": "该给烁烁测体温了",
+                    "body": "疫苗接种后体温监测 · 流脑ACYW 第2针",
+                    "context": {
+                        "anchorTime": "2026-08-04T01:35:00Z",
+                        "slot": 1,
+                        "windowEnd": "2026-08-07T01:35:00Z",
+                    },
+                },
+            },
+        )
+        assert vaccine_with_new_temperature["temperature_observation"]["status"] == "recorded_in_window"
+        assert vaccine_with_new_temperature["latest_temperature"] == {
+            "value_display": "37.2°C",
+            "time_display": "08-04 09:36",
+            "status": "正常",
+            "status_label": "正常",
+        }
+
 
 def test_static_contracts() -> None:
     skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
     frontmatter = skill.split("---", 2)[1]
     assert "\nversion:" not in frontmatter
-    assert '  version: "2.12.0"' in frontmatter
+    assert '  version: "2.12.1"' in frontmatter
     assert "raw.githubusercontent.com" not in skill
     assert "/api/stats?babyId=ID&days=1" in skill
     assert "signature-verified webhook" in skill
@@ -353,10 +418,12 @@ def test_static_contracts() -> None:
     assert 'call_time date-of "$startTime"' in analyzer
     assert 'temp_status = "发烧"' not in analyzer
     assert 'temp_status = "低烧"' not in analyzer
+    assert 'recorded_at >= anchor_time' in analyzer
 
     playbook = (SKILL_DIR / "resources" / "webhook-analysis.md").read_text(encoding="utf-8")
     assert "data.changes" in playbook
     assert "changes.completed.new" in playbook
+    assert "none_in_window" in playbook
 
 
 def main() -> None:

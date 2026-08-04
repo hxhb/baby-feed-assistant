@@ -139,7 +139,11 @@ Use `items[]` with exact latest values/dates and optional trend. If the queried 
 
 ### `vaccine_event_window`
 
-Use `vaccine_info`, `slot`, optional `latest_temperature`, and `window`. Do not call a generic event window a vaccine reminder.
+Use `vaccine_info`, `slot`, `temperature_observation`, optional `latest_temperature`, and `window`. Do not call a generic event window a vaccine reminder.
+
+- `latest_temperature`, when present, is already filtered to this rule's monitoring window. Display its `time_display`, including the date; do not replace it with `time_short` or independently query an unfiltered latest temperature.
+- When `temperature_observation.status` is `none_in_window`, say there is no temperature record after this vaccination yet and remind the user to measure it. Do not mention or summarize older temperature records.
+- When the status is `window_start_unavailable` or `history_unavailable`, say the post-vaccination temperature record could not be verified. Do not treat an unfiltered historical record as a fallback.
 
 ### `generic_interval`, `generic_event_window`, or `unknown`
 

@@ -1,7 +1,7 @@
 ---
 name: baby-feed-assistant
 metadata:
-  version: "2.12.0"
+  version: "2.12.1"
 description: "Use the Baby Feed HTTP API to query, create, update, and delete baby profiles, feeding records, solid-food records, health measurements, diapers, sleep, vaccines, medication, memos, and reminder rules. Trigger for English or Chinese requests about nursing, bottles, formula, solid food, feeding totals, diapers, sleep, weight, height, temperature, vitamin AD, vaccines, medication, growth trends, daily/weekly summaries, memos, tasks, or reminders, including both queries and explicit recording/editing requests. Also handle trusted Baby Feed webhook events: feeding.*, health.*, memo.*, reminder.fired, and user.deleted."
 ---
 
@@ -98,6 +98,12 @@ Important response boundaries:
 - `stats.sleepDurationMinutes` is already cumulative; never add the latest sleep segment again.
 - `stats.weightTrend` and `heightTrend` contain full history; `medicationRecords` is limited by `days`.
 - Use `sleep-summary`, not raw `health?type=SLEEP`, for daily sleep totals.
+
+Health-record freshness is contextual:
+
+- An unfiltered first row is the chronologically latest record, not proof of the baby's current state. Always include its Beijing date; never call an old temperature "current", "today's", or "recent", and never use it to say the baby is currently normal.
+- For a current-day status, query that Beijing date. If it returns no temperature row, say there is no temperature record today; do not substitute an older row.
+- For post-vaccine monitoring, only a temperature recorded at or after that reminder rule's `triggerConfig.anchorTime` belongs to the current monitoring window. Let `analyze-event.sh reminder` enforce this boundary; never add an older temperature from a separate history query.
 
 ## Handle writes safely
 
