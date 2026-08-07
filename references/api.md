@@ -12,7 +12,8 @@ Use this file for exact request fields and response boundaries. Call every endpo
 6. Statistics
 7. Memos
 8. Reminder rules
-9. Timeline dates
+9. Quick-record preferences
+10. Timeline dates
 
 ## 1. Common rules
 
@@ -130,15 +131,18 @@ Common required fields: `babyId`, `type`, `recordedAt`. `notes` is optional for 
 | `MEDICATION` | `medicationName` | `medicationDose` |
 | `VACCINE` | `vaccineName`, `vaccineDoseNumber`, `vaccineTotalDoses` | `vaccineManufacturer` |
 | `DIAPER` | `diaperType` | `diaperStatus` |
-| `AD_VITAMIN` | `adGiven` | none |
+| `AD_VITAMIN` | at least one of `adGiven: true` or `vitaminDGiven: true` | the other boolean field |
 | `SLEEP` | `sleepStartTime` | `sleepEndTime`, `sleepQuality` |
+| `CUSTOM` | `customName` | none |
 
 Validation:
 
 - `weight`: `0-100` kg; `height`: `0-200` cm; `temperature`: `30-45` °C.
 - `diaperType`: `PEE`, `POOP`, or `BOTH`. `BOTH` contributes one pee and one poop in stats.
 - Vaccine dose numbers are integers `1-20`, both are required, and current dose cannot exceed total doses.
-- Health text fields are at most 200 characters; notes are at most 1000.
+- `adGiven` and `vitaminDGiven` are independent booleans on an `AD_VITAMIN` record; at least one must be true.
+- `customName` is a non-empty string up to 100 characters. Other health text fields are at most 200 characters; notes are at most 1000.
+- `CUSTOM` has no `customValue` or `customUnit` field. Put optional free-form detail in `notes`; never invent unsupported custom fields.
 - If sleep end exists, it cannot precede sleep start. Ongoing sleep may omit `sleepEndTime`.
 
 Example ongoing sleep:
@@ -159,7 +163,7 @@ Example ongoing sleep:
 | PUT | `/api/health/:id` | Partial update; changing `type` clears fields from the old type |
 | DELETE | `/api/health/:id` | Returns `{ "success": true }` |
 
-PUT accepts `type`, all health fields, `recordedAt`, and `notes`. The merged record must satisfy the effective type's business rules.
+PUT accepts `type`, all health fields including `vitaminDGiven` and `customName`, `recordedAt`, and `notes`. The merged record must satisfy the effective type's business rules. Changing `type` clears fields belonging to the previous type.
 
 ## 5. Sleep summary
 
@@ -198,23 +202,29 @@ Only completed sleeps with both start and end contribute to the summary. A cross
 
 Returns `date`, breast feeding count/duration, breast-bottle count/amount, formula count/amount, `adGiven`, and optional measured `weight`/`temperature`.
 
-It does not return solid food, height, diaper counts, sleep, vaccine, or medication. Query `/api/feeding` for solid-food records.
+It does not return solid food, height, diaper counts, sleep, vaccine, medication, or `vitaminDGiven`. Query `/api/feeding` for solid-food records and `/api/health?babyId=ID&type=AD_VITAMIN&date=YYYY-MM-DD` for that day's vitamin D record.
 
 ### Multi-day statistics
 
-`GET /api/stats?babyId=ID[&days=N]`, where `days` defaults to 7 and is `1-365`.
+Use exactly one range form:
+
+- `GET /api/stats?babyId=ID&days=N`, where `days` defaults to 7 and is `1-365`.
+- `GET /api/stats?babyId=ID&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` for an inclusive custom range.
+
+Custom ranges require both dates, cannot end after the current Beijing date, and cannot exceed 365 days. `startDate` cannot be later than `endDate`. When custom dates and `days` are both supplied, the custom dates take precedence.
 
 Important fields:
 
-- `todayStats` and `lastDays`: milk totals, left/right duration, diapers, night feeding, sleep totals/count, AD, and optional measurements.
+- `todayStats` and `lastDays`: milk totals, left/right duration, diapers, night feeding, sleep totals/count, AD, and optional measurements. For a historical custom range that excludes today, `todayStats` is the range end day's row despite its legacy field name.
 - `totalStats`: totals over the selected range.
 - `weightTrend`, `heightTrend`: full history, ascending.
 - `vaccineRecords`: full history, descending.
 - `medicationRecords`: only within the selected range.
 - `memoRecords`: all memos.
-- `feedingIntervals`, `feedingHeatmap`, `babyBirthDate`.
+- `feedingIntervals` and `feedingHeatmap`: only within the selected range.
+- `babyBirthDate`: Beijing `YYYY-MM-DD`; `babyGender`: `MALE`, `FEMALE`, or `null`.
 
-The HTTP `/api/stats` route currently does not expose solid-food names or amounts. `sleepDurationMinutes` is already cumulative and must not be augmented manually.
+The HTTP `/api/stats` route currently does not expose solid-food names/amounts, `vitaminDGiven`, or a BMI field. Query full `AD_VITAMIN` health history and filter by Beijing date for a vitamin D range. BMI shown by the UI is derived from growth records. `sleepDurationMinutes` is already cumulative and must not be augmented manually.
 
 ## 7. Memos
 
@@ -276,9 +286,28 @@ Trigger configurations:
 - `activeSchedule` is an object shaped as `{ "windows": [{ "start": "HH:mm", "end": "HH:mm" }] }` and can contain up to 10 windows.
 - Supported template variables include `{{babyName}}`, `{{ruleName}}`, `{{now}}`, and `{{elapsed}}`.
 
+PUT accepts the mutable rule fields above and also `babyId`. A changed baby must belong to the authenticated user and resets `nextCheckAt`, as do scheduling changes.
+
 Use cron for generic daily reminders; do not assume every cron reminder maps to a health record. Event-window rules created by the current UI are vaccine-monitoring rules, but API-created event windows may be generic.
 
-## 9. Timeline dates
+## 9. Quick-record preferences
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/user/quick-records` | Return `{ "keys": [...] }` for the current user |
+| PUT | `/api/user/quick-records` | Replace the ordered quick-record keys |
+
+PUT body shape: `{ "keys": ["BREAST_MILK", "FORMULA", "GROUP_HEALTH", "GROUP_MEMO"] }`.
+
+The array must be non-empty, unique, and contain only these values:
+
+- Group keys: `GROUP_FEEDING`, `GROUP_HEALTH`, `GROUP_MEMO`.
+- Feeding keys: `BREAST_MILK`, `BREAST_MILK_BOTTLE`, `FORMULA`, `SOLID_FOOD`.
+- Health keys: `WEIGHT`, `HEIGHT`, `TEMPERATURE`, `MEDICATION`, `VACCINE`, `DIAPER`, `AD_VITAMIN`, `SLEEP`, `CUSTOM`.
+
+The default keys are `BREAST_MILK`, `FORMULA`, `GROUP_HEALTH`, and `GROUP_MEMO`. This preference is user-wide and does not require baby selection.
+
+## 10. Timeline dates
 
 `GET /api/timeline-dates?babyId=ID`
 

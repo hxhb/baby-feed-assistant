@@ -1,8 +1,8 @@
 ---
 name: baby-feed-assistant
 metadata:
-  version: "2.12.1"
-description: "Use the Baby Feed HTTP API to query, create, update, and delete baby profiles, feeding records, solid-food records, health measurements, diapers, sleep, vaccines, medication, memos, and reminder rules. Trigger for English or Chinese requests about nursing, bottles, formula, solid food, feeding totals, diapers, sleep, weight, height, temperature, vitamin AD, vaccines, medication, growth trends, daily/weekly summaries, memos, tasks, or reminders, including both queries and explicit recording/editing requests. Also handle trusted Baby Feed webhook events: feeding.*, health.*, memo.*, reminder.fired, and user.deleted."
+  version: "2.13.0"
+description: "Use the Baby Feed HTTP API to query, create, update, and delete baby profiles, feeding records, solid-food records, health measurements, custom health records, diapers, sleep, vaccines, medication, memos, reminder rules, and quick-record preferences. Trigger for English or Chinese requests about nursing, bottles, formula, solid food, feeding totals, diapers, sleep, weight, height, BMI, temperature, vitamin AD, vitamin D, vaccines, medication, custom health entries, growth trends, preset or custom date-range summaries, memos, tasks, reminders, or quick-record settings, including both queries and explicit recording/editing requests. Also handle trusted Baby Feed webhook events: feeding.*, health.*, memo.*, reminder.fired, and user.deleted."
 ---
 
 # Baby Feed Assistant
@@ -64,6 +64,8 @@ The script only fetches Git metadata from the pinned `hxhb/baby-feed-assistant` 
 
 ## Select the baby before interactive data access
 
+Skip baby selection for user-wide quick-record preferences. For baby-owned records and reminder rules:
+
 1. Call `GET /api/babies` once per conversation and keep the returned IDs in conversation context.
 2. If there are no babies, explain that a baby profile is required.
 3. If there is one baby, use it.
@@ -84,19 +86,24 @@ Get Beijing `today` through `time-helper.sh`; never send the literal string `tod
 | Latest feeding, even if not today | `GET /api/feeding?babyId=ID`, then first item |
 | Feeding details on a date | `GET /api/feeding?babyId=ID&date=DATE` |
 | Today's diaper count/details | `GET /api/health?babyId=ID&type=DIAPER&date=DATE` |
+| Today's AD / vitamin D details | `GET /api/health?babyId=ID&type=AD_VITAMIN&date=DATE` |
 | Sleep total and cross-midnight segments | `GET /api/sleep-summary?babyId=ID&date=DATE` |
 | Latest weight/height/temperature | `GET /api/health?babyId=ID&type=TYPE`, then first item |
 | Health history of one type | Same endpoint without `date` |
 | 7/14/30-day totals and trends | `GET /api/stats?babyId=ID&days=N` |
+| Custom-range totals and trends | `GET /api/stats?babyId=ID&startDate=DATE&endDate=DATE` |
 | Open memos around a date | `GET /api/memo?babyId=ID&completed=false&date=DATE&rangeDays=N` |
 | Reminder rules | `GET /api/reminders?babyId=ID` |
+| Quick-record preferences | `GET /api/user/quick-records` |
 | Dates containing records | `GET /api/timeline-dates?babyId=ID` |
 
 Important response boundaries:
 
-- `stats/day` does not include solid food, height, diapers, sleep, vaccines, or medication.
+- `stats/day` does not include solid food, height, diapers, sleep, vaccines, medication, or `vitaminDGiven`.
 - `stats.sleepDurationMinutes` is already cumulative; never add the latest sleep segment again.
-- `stats.weightTrend` and `heightTrend` contain full history; `medicationRecords` is limited by `days`.
+- In `/api/stats`, `lastDays`, `totalStats`, feeding intervals/heatmap, and `medicationRecords` use the requested preset or custom range. `weightTrend`, `heightTrend`, `vaccineRecords`, and `memoRecords` contain full history.
+- `/api/stats` currently aggregates `adGiven` but not `vitaminDGiven`. Query `health?type=AD_VITAMIN` for vitamin D records and apply Beijing-date boundaries when a range is requested.
+- `/api/stats` returns `babyGender` and `babyBirthDate`, but no BMI field. Treat BMI as a derived value and never present it as an API measurement.
 - Use `sleep-summary`, not raw `health?type=SLEEP`, for daily sleep totals.
 
 Health-record freshness is contextual:
@@ -141,7 +148,7 @@ Reject an invalid or unresolved time instead of guessing. See `references/time-h
 - Present health data as records and trends, not diagnoses. Age, measurement method, and clinician guidance can change interpretation.
 - Treat 37.5°C and 38.5°C only as product attention thresholds, not diagnoses. Say the reading is elevated and suggest rechecking/consulting a clinician as appropriate; do not claim a growth percentile unless an API or deterministic tool supplied it.
 
-Common labels: `BREAST_MILK` 亲喂母乳, `BREAST_MILK_BOTTLE` 瓶喂母乳, `FORMULA` 配方奶, `SOLID_FOOD` 辅食, `DIAPER` 大小便, `SLEEP` 睡眠, `TEMPERATURE` 体温, `WEIGHT` 体重, `HEIGHT` 身高, `AD_VITAMIN` 维生素 AD, `VACCINE` 疫苗, `MEDICATION` 用药.
+Common labels: `BREAST_MILK` 亲喂母乳, `BREAST_MILK_BOTTLE` 瓶喂母乳, `FORMULA` 配方奶, `SOLID_FOOD` 辅食, `DIAPER` 大小便, `SLEEP` 睡眠, `TEMPERATURE` 体温, `WEIGHT` 体重, `HEIGHT` 身高, `AD_VITAMIN` AD / 维生素 D, `VACCINE` 疫苗, `MEDICATION` 用药, `CUSTOM` 自定义健康记录.
 
 ## Webhook entry point
 

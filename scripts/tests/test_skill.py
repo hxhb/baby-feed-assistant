@@ -138,7 +138,7 @@ case "$args" in
   *"rev-parse --verify refs/remotes/origin/master"*) printf '%s\n' '2222222222222222222222222222222222222222' ;;
   *"rev-list --left-right --count"*) printf '%s\n' '0 3' ;;
   *"show refs/remotes/origin/master:SKILL.md"*)
-    printf '%s\n' '---' 'name: baby-feed-assistant' 'metadata:' '  version: "2.13.0"' 'description: test' '---'
+    printf '%s\n' '---' 'name: baby-feed-assistant' 'metadata:' '  version: "2.14.0"' 'description: test' '---'
     ;;
   *) printf 'unexpected git call: %s\n' "$args" >&2; exit 1 ;;
 esac
@@ -152,8 +152,8 @@ esac
         update = json.loads(result.stdout)
         assert update["status"] == "update_available"
         assert update["updateAvailable"] is True
-        assert update["localVersion"] == "2.12.1"
-        assert update["remoteVersion"] == "2.13.0"
+        assert update["localVersion"] == "2.13.0"
+        assert update["remoteVersion"] == "2.14.0"
         assert update["behind"] == 3
 
         untrusted = run(
@@ -398,15 +398,26 @@ def test_static_contracts() -> None:
     skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
     frontmatter = skill.split("---", 2)[1]
     assert "\nversion:" not in frontmatter
-    assert '  version: "2.12.1"' in frontmatter
+    assert '  version: "2.13.0"' in frontmatter
     assert "raw.githubusercontent.com" not in skill
     assert "/api/stats?babyId=ID&days=1" in skill
+    assert "/api/stats?babyId=ID&startDate=DATE&endDate=DATE" in skill
+    assert "/api/user/quick-records" in skill
+    assert "`CUSTOM` 自定义健康记录" in skill
+    assert "not `vitaminDGiven`" in skill
     assert "signature-verified webhook" in skill
 
     api_reference = (SKILL_DIR / "references" / "api.md").read_text(encoding="utf-8")
     assert "no more than one day in the future" in api_reference
     assert "up to five years in the future" in api_reference
     assert 'activeSchedule` is an object shaped as `{ "windows"' in api_reference
+    assert "`vitaminDGiven`" in api_reference
+    assert "`customName`" in api_reference
+    assert "no `customValue` or `customUnit` field" in api_reference
+    assert "custom dates take precedence" in api_reference
+    assert "`babyGender`" in api_reference
+    assert "`GROUP_FEEDING`, `GROUP_HEALTH`, `GROUP_MEMO`" in api_reference
+    assert "filter by Beijing date for a vitamin D range" in api_reference
 
     query = (SCRIPTS / "query-api.sh").read_text(encoding="utf-8")
     assert "result = $FILTER" not in query
@@ -424,6 +435,8 @@ def test_static_contracts() -> None:
     assert "data.changes" in playbook
     assert "changes.completed.new" in playbook
     assert "none_in_window" in playbook
+    assert "`vitaminDGiven`" in playbook
+    assert "`customName`" in playbook
 
 
 def main() -> None:
